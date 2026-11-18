@@ -18,6 +18,8 @@ import {
   deleteSongFromSupabase,
   exportSongsToSupabase,
   findSongInSupabase,
+  getSupabaseKeyRole,
+  getSupabaseKeySources,
   getSupabaseTableCounts,
   importSongsFromSupabase,
   inspectSupabaseCatalog,
@@ -209,6 +211,8 @@ apiApp.get('/api/health', (req: Request, res: Response) => {
     blobConfigured: isBlobConfigured(),
     supabaseConfigured: isSupabaseConfigured(),
     supabaseWriteConfigured: isSupabaseWriteConfigured(),
+    supabaseKeyRole: getSupabaseKeyRole(),
+    supabaseKeySources: getSupabaseKeySources(),
   });
 });
 
@@ -368,12 +372,13 @@ apiApp.post('/api/songs', async (req: Request, res: Response): Promise<void> => 
     const sources: string[] = [];
 
     if (isSupabaseWriteConfigured()) {
-      try {
-        await upsertSongToSupabase(newSong);
-        sources.push('supabase');
-      } catch (supabaseErr: any) {
-        console.warn('Supabase write fallback:', supabaseErr?.message);
-      }
+      await upsertSongToSupabase(newSong);
+      sources.push('supabase');
+    } else if (isSupabaseConfigured() && !isBlobConfigured()) {
+      res.status(403).json({
+        error: `Supabase em modo somente leitura (chave atual: ${getSupabaseKeyRole()}). Defina SUPABASE_SERVICE_ROLE_KEY (ou SUPABASE_SECRET_KEY) válida nos Secrets para salvar faixas.`,
+      });
+      return;
     }
 
     if (isBlobConfigured()) {
@@ -389,7 +394,7 @@ apiApp.post('/api/songs', async (req: Request, res: Response): Promise<void> => 
     res.status(201).json({ song: newSong, source: sources.join('+') || 'local-json' });
   } catch (err: any) {
     console.error('Error saving song:', err);
-    res.status(500).json({ error: 'Erro ao salvar metadados da música.', details: err?.message });
+    res.status(500).json({ error: err?.message || 'Erro ao salvar metadados da música.' });
   }
 });
 
@@ -854,13 +859,26 @@ apiApp.post(
       createdAt: new Date().toISOString(),
     };
 
+    if (isSupabaseConfigured() && !isSupabaseWriteConfigured() && !isBlobConfigured()) {
+      res.status(403).json({
+        error: `Upload bloqueado: Supabase conectado apenas em leitura (role atual: ${getSupabaseKeyRole()}). Configure SUPABASE_SERVICE_ROLE_KEY (chave service_role) ou SUPABASE_SECRET_KEY nos Secrets.`,
+      });
+      return;
+    }
+
     let savedToSupabase = false;
     if (isSupabaseWriteConfigured()) {
       try {
         await upsertSongToSupabase(newSong);
         savedToSupabase = true;
       } catch (supabaseErr: any) {
-        console.warn('Supabase upload write fallback:', supabaseErr?.message);
+        console.error('Supabase upload write error:', supabaseErr?.message);
+        if (!isBlobConfigured()) {
+          res.status(500).json({
+            error: supabaseErr?.message || 'Erro ao gravar faixa nas tabelas do Supabase.',
+          });
+          return;
+        }
       }
     }
 
@@ -870,9 +888,13 @@ apiApp.post(
       const songs = loadLocalSongs();
       songs.unshift(newSong);
       saveLocalSongs(songs);
+    } else {
+      const songs = loadLocalSongs();
+      songs.unshift(newSong);
+      saveLocalSongs(songs);
     }
 
-    res.status(201).json({ success: true, song: newSong });
+    res.status(201).json({ success: true, song: newSong, savedToSupabase });
   }
 );
 

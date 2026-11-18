@@ -43,11 +43,6 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
     }
   };
 
-  const handleUseDefaultKey = () => {
-    setPassword('P@drao283011');
-    setError(null);
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
       <div className="relative w-full max-w-md rounded-2xl glass-panel-elevated p-6 md:p-8 border border-white/15 text-white shadow-2xl">
@@ -105,17 +100,6 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-          </div>
-
-          <div className="flex items-center justify-between text-[11px] font-mono-code text-white/50 pt-0.5">
-            <span>Chave padrão do estúdio:</span>
-            <button
-              type="button"
-              onClick={handleUseDefaultKey}
-              className="text-amber-400 hover:text-amber-300 underline font-bold"
-            >
-              Preencher (P@drao283011)
-            </button>
           </div>
 
           <button

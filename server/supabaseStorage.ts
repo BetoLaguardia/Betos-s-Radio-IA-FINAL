@@ -58,9 +58,37 @@ export interface SupabaseTableCounts {
   lyrics: number;
 }
 
+function classifyKeyRole(key?: string): string {
+  const trimmed = key?.trim();
+  if (!trimmed) return 'none';
+  if (trimmed.startsWith('sb_secret_')) return 'sb_secret';
+  if (trimmed.startsWith('sb_publishable_')) return 'sb_publishable';
+  const parts = trimmed.split('.');
+  if (parts.length === 3) {
+    try {
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as { role?: string };
+      if (payload?.role) return `jwt:${payload.role}`;
+    } catch {
+      // ignore invalid jwt
+    }
+  }
+  return 'unknown';
+}
+
+function isWriteRole(role: string): boolean {
+  return role === 'sb_secret' || role === 'jwt:service_role';
+}
+
 function getSupabaseEnv() {
   const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL)?.trim();
-  const writeKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY)?.trim();
+  const candidates = [
+    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim(),
+    process.env.SUPABASE_SECRET_KEY?.trim(),
+  ].filter((k): k is string => Boolean(k));
+
+  const preferredWriteKey = candidates.find((k) => isWriteRole(classifyKeyRole(k)));
+  const writeKey = preferredWriteKey || candidates[0];
+
   const readKey = (
     process.env.SUPABASE_ANON_KEY ||
     process.env.SUPABASE_PUBLISHABLE_KEY ||
@@ -75,6 +103,20 @@ function getSupabaseEnv() {
   };
 }
 
+export function getSupabaseKeySources() {
+  return {
+    serviceRoleEnv: classifyKeyRole(process.env.SUPABASE_SERVICE_ROLE_KEY),
+    secretEnv: classifyKeyRole(process.env.SUPABASE_SECRET_KEY),
+    anonEnv: classifyKeyRole(process.env.SUPABASE_ANON_KEY),
+    publishableEnv: classifyKeyRole(process.env.SUPABASE_PUBLISHABLE_KEY),
+  };
+}
+
+export function getSupabaseKeyRole(): string {
+  const { writeKey, readKey } = getSupabaseEnv();
+  return classifyKeyRole(writeKey || readKey);
+}
+
 export function isSupabaseConfigured(): boolean {
   const { url, key } = getSupabaseEnv();
   return Boolean(url && key && url.startsWith('https://'));
@@ -82,7 +124,10 @@ export function isSupabaseConfigured(): boolean {
 
 export function isSupabaseWriteConfigured(): boolean {
   const { url, writeKey } = getSupabaseEnv();
-  return Boolean(url && writeKey && url.startsWith('https://'));
+  if (!url || !writeKey || !url.startsWith('https://')) return false;
+  const role = classifyKeyRole(writeKey);
+  if (role === 'jwt:anon' || role === 'sb_publishable') return false;
+  return true;
 }
 
 function getSupabaseClient(): SupabaseClient {
@@ -240,7 +285,7 @@ export async function inspectSupabaseCatalog() {
     }
   })();
 
-  return { host, tables, buckets };
+  return { host, keyRole: getSupabaseKeyRole(), tables, buckets };
 }
 
 export async function findSongInSupabase(id: string): Promise<StoredSong | null> {

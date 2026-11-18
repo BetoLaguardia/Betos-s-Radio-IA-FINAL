@@ -103,9 +103,20 @@ export async function uploadSongViaVercelBlob(input: BlobSongUploadInput): Promi
       headers: authHeaders,
       body: formData,
     });
-    const data = await res.json();
+    const rawText = await res.text();
+    let data: any = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      data = null;
+    }
     if (!res.ok) {
-      throw new Error(data.error || 'Erro no upload local.');
+      throw new Error(
+        data?.error ||
+          (res.status === 413
+            ? 'Arquivo muito grande para envio direto via servidor.'
+            : `Erro no upload (HTTP ${res.status}).`)
+      );
     }
     onProgress?.({ stage: 'Concluído!', percentage: 100 });
     return { song: data.song, viaBlob: false };
