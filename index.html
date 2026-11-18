@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      (function () {
+        function ensureWritableFetch(target) {
+          if (!target) return;
+          try {
+            var desc = Object.getOwnPropertyDescriptor(target, 'fetch');
+            if (desc && (!desc.writable || (desc.get && !desc.set))) {
+              if (desc.configurable) {
+                var currentFetch = target.fetch || window.fetch;
+                Object.defineProperty(target, 'fetch', {
+                  value: currentFetch,
+                  writable: true,
+                  enumerable: desc.enumerable !== false,
+                  configurable: true,
+                });
+              }
+            } else if (!desc && target === window) {
+              var proto = Object.getPrototypeOf(window);
+              var protoDesc = proto && Object.getOwnPropertyDescriptor(proto, 'fetch');
+              if (protoDesc && protoDesc.get && !protoDesc.set) {
+                Object.defineProperty(window, 'fetch', {
+                  value: window.fetch,
+                  writable: true,
+                  enumerable: true,
+                  configurable: true,
+                });
+              }
+            }
+          } catch (e) {}
+        }
+
+        ensureWritableFetch(window);
+        if (typeof Window !== 'undefined' && Window.prototype) {
+          ensureWritableFetch(Window.prototype);
+        }
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            var filename = event && event.filename ? String(event.filename) : '';
+            var msg = event && event.message ? String(event.message) : '';
+            if (
+              filename.indexOf('chrome-extension://') === 0 &&
+              msg.indexOf('fetch') !== -1
+            ) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          },
+          true
+        );
+      })();
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Beto's Radio - Som Retrô-Futurista & Hi-Fi</title>
+    <link rel="icon" type="image/jpeg" href="/logo.jpg" />
+    <meta name="description" content="Beto's Radio: Transmissão musical exclusiva, player hi-fi com letras sincronizadas, suporte a Cast e estúdio interno de produção com Suno e Gemini." />
+    <meta property="og:title" content="Beto's Radio - Som Retrô-Futurista & Hi-Fi" />
+    <meta property="og:description" content="Beto's Radio: Transmissão musical exclusiva, player hi-fi com letras sincronizadas, suporte a Cast e estúdio interno de produção com Suno e Gemini." />
+    <meta property="og:image" content="/logo.jpg" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

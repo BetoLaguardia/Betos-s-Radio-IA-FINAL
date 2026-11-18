@@ -1,0 +1,8 @@
+{
+  "name": " Betos Radio",
+  "description": "Aplicativo de streaming com IA que utiliza algoritmos personalizados para selecionar estações de música ao vivo",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

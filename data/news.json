@@ -1,0 +1,80 @@
+[
+  {
+    "id": "news-1",
+    "songId": "track-1",
+    "title": "Sintaxe & Silício Funde Termodinâmica e Poesia Neoconcretista em Novo Lançamento Exclusivo",
+    "subtitle": "Conheça o quarteto que gravou em fita analógica um tratado lírico sobre entropia e relações humanas.",
+    "category": "Lançamento da Semana",
+    "author": "Redação Beto's Radio",
+    "publishedAt": "Hoje às 14:30",
+    "readTime": "4 min de leitura",
+    "leadParagraph": "Em uma sala rodeada por clássicos da literatura filosófica e gravadores de rolo dos anos 70, o quarteto Sintaxe & Silício apresentou 'Equações de um Amor Entrópico', obra que redefine o pop barroco progressivo na programação da Beto's Radio.",
+    "body": [
+      "A vocalista e tecladista Helena Vane explica que a faixa nasceu da constatação de que as relações contemporâneas obedecem, quase com rigor matemático, à segunda lei da termodinâmica: quanto mais tentamos conter o calor de uma conexão, maior é a dispersão entrópica ao redor.",
+      "Composta em um compasso alternado de 7/8, a canção utiliza arpejos de violão com cordas de nylon gravados ao vivo pelo guitarrista Arthur Mendes, combinados aos graves encorpados de um violoncelo acústico empunhado por Dara Lin e sintetizadores modulares analógicos operados por Gael Nogueira.",
+      "Para a gravação, a banda recusou plugins digitais modernos em favor de equipamentos valvulados de 1974. 'Queríamos que o ouvinte sentisse o atrito real da fita magnética contra o cabeçote, como se cada palavra cantada estivesse lutando contra o esquecimento temporal', destaca Helena.",
+      "A música já está disponível no acervo oficial da Beto's Radio, com reprodução em alta fidelidade e sincronia lírica instantânea no teleprompter da estação."
+    ],
+    "bandName": "Sintaxe & Silício",
+    "songTitle": "Equações de um Amor Entrópico",
+    "albumCoverUrl": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80",
+    "bandPhotoUrl": "/capas/sintaxe_silicio_band.jpg",
+    "quote": {
+      "text": "Não há sofisma que resista à simetria de um amor honesto gravado em fita analógica.",
+      "speaker": "Helena Vane (Voz & Mellotron)"
+    },
+    "featured": true
+  },
+  {
+    "id": "news-2",
+    "songId": "track-2",
+    "title": "Cortex & Orquídea Revela Bastidores de 'Criptografia dos Lençóis' em Sessão Noturna de Jazz",
+    "subtitle": "Duo traz elegância do neo-soul e reflexões de Roland Barthes para os holofotes da Beto's Radio.",
+    "category": "Especial de Estúdio",
+    "author": "Crítica Musical Beto's Sound",
+    "publishedAt": "Ontem às 21:15",
+    "readTime": "3 min de leitura",
+    "leadParagraph": "Sob luzes âmbar e aveludadas de uma casa de jazz subterrânea, Maya Alvim e Lucas Prado conceberam uma das baladas mais sensuais e intelectualmente lúcidas da música recente.",
+    "body": [
+      "'Criptografia dos Lençóis' afasta os clichês românticos habituais ao transformar a conversa amorosa em um diálogo sobre arquitetura modernista, intimidade sem cinismo e criptografia afetiva.",
+      "Os acordes estendidos de piano elétrico Fender Rhodes, combinados com um trompete abafado e vocais sussurrados, criam uma atmosfera intimista a 82 BPM com saturação analógica que hipnotiza o ouvinte.",
+      "'A inteligência e o desejo não são opostos', afirma Maya Alvim. 'Quando duas mentes se desafiam com respeito e agudeza, a atração física ganha uma voltagem muito mais duradoura.'",
+      "A faixa se consolidou como uma das mais pedidas pelos ouvintes na transmissão contínua de Beto's Radio."
+    ],
+    "bandName": "Cortex & Orquídea",
+    "songTitle": "Criptografia dos Lençóis",
+    "albumCoverUrl": "https://images.unsplash.com/photo-1507676184212-d03ab07a01bf?w=800&auto=format&fit=crop&q=80",
+    "bandPhotoUrl": "/capas/cortex_orquidea_band.jpg",
+    "quote": {
+      "text": "O romance inteligente inventa o tabuleiro e quebra o próprio jogo.",
+      "speaker": "Lucas Prado (Rhodes & Baixo)"
+    },
+    "featured": false
+  },
+  {
+    "id": "news-3",
+    "songId": "track-3",
+    "title": "Deterministas Anônimos Desafia Algoritmos com Explosão de Math-Rock e Synthwave",
+    "subtitle": "Com 'A Ilusão de Laplace', trio eletrônico propõe um manifesto sonoro a favor do livre-arbítrio e do caos criativo.",
+    "category": "Manifesto Sonoro",
+    "author": "Redação Beto's Radio",
+    "publishedAt": "10 de Novembro",
+    "readTime": "5 min de leitura",
+    "leadParagraph": "Com batidas a 128 BPM e linhas de baixo modular pulsantes, a banda underground Deterministas Anônimos questiona a previsão algorítmica da sociedade moderna.",
+    "body": [
+      "Inspirada pelo conceito filosófico do Demônio de Laplace, a canção defende a imprevisibilidade humana como a faísca mais valiosa da existência.",
+      "Guitarras distorcidas colidem com vocoders e sintetizadores analógicos em um arranjo tenso e cinematográfico que empolga do início ao fim.",
+      "Para o líder Caio Vex, a música é uma convocação: 'Se tudo já estivesse traçado e calculado por modelos preditivos, nenhum beijo e nenhuma melodia valeriam o risco.'",
+      "Confira a matéria completa, as letras decodificadas e escute na íntegra no player da rádio."
+    ],
+    "bandName": "Deterministas Anônimos",
+    "songTitle": "A Ilusão de Laplace",
+    "albumCoverUrl": "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=800&auto=format&fit=crop&q=80",
+    "bandPhotoUrl": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "quote": {
+      "text": "A incerteza não é um defeito do sistema, é o ar que nos faz respirar e amar.",
+      "speaker": "Caio Vex (Voz & Sintetizadores)"
+    },
+    "featured": false
+  }
+]

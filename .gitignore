@@ -1,0 +1,16 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+public/uploads/
+public/capas/
+public/musicas/
+capas/
+musicas/
+*.mp3
+*.wav
+*.mp4
