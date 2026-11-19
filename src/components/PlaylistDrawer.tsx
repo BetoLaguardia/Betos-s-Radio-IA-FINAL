@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Music, Play, Trash2, Clock, Sparkles, Filter, Search, Check, Disc, ExternalLink, Heart, Share2, RefreshCw } from 'lucide-react';
+import { Music, Play, Trash2, Clock, Sparkles, Filter, Search, Check, Disc, ExternalLink, Heart, Share2, RefreshCw, Edit3 } from 'lucide-react';
 import { Song } from '../types/song';
 import { useAdmin } from '../context/AdminContext';
 
@@ -13,6 +13,7 @@ interface PlaylistDrawerProps {
   sharedSongId?: string | null;
   onSelectSong: (song: Song) => void;
   onDeleteSong: (id: string) => void;
+  onEditSong?: (song: Song) => void;
   onToggleLike?: (id: string) => void;
   onShareSong?: (song: Song) => void;
   onRefreshSongs?: () => Promise<void> | void;
@@ -30,6 +31,7 @@ export const PlaylistDrawer: React.FC<PlaylistDrawerProps> = ({
   sharedSongId = null,
   onSelectSong,
   onDeleteSong,
+  onEditSong,
   onToggleLike,
   onShareSong,
   onRefreshSongs,
@@ -288,18 +290,32 @@ export const PlaylistDrawer: React.FC<PlaylistDrawerProps> = ({
                     );
                   })()}
 
-                  {/* Trash delete icon ONLY for admin */}
+                  {/* Admin Edit & Delete icons ONLY for admin */}
                   {isAdmin && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteSong(song.id);
-                      }}
-                      title="Remover da rádio (Admin)"
-                      className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 text-white/40 hover:text-red-400 hover:bg-white/5 transition-all"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <>
+                      {onEditSong && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEditSong(song);
+                          }}
+                          title="Editar dados da música (Admin)"
+                          className="p-1.5 rounded-lg opacity-70 sm:opacity-0 sm:group-hover:opacity-100 text-cyan-300/80 hover:text-cyan-300 hover:bg-cyan-500/10 transition-all"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteSong(song.id);
+                        }}
+                        title="Remover da rádio (Admin)"
+                        className="p-1.5 rounded-lg opacity-70 sm:opacity-0 sm:group-hover:opacity-100 text-white/40 hover:text-red-400 hover:bg-white/5 transition-all"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </>
                   )}
                 </div>
               </div>

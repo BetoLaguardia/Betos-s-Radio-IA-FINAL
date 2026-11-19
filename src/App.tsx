@@ -11,6 +11,33 @@ import { useAdmin } from './context/AdminContext';
 import { generateAutomaticLyrics } from './utils/lyricGenerator';
 import { loadCachedDurations, probeAudioDuration, saveCachedDuration } from './utils/audioDuration';
 
+function getAbsoluteArtworkUrl(url?: string): string {
+  const fallback = `${window.location.origin}/logo.jpg`;
+  if (!url) return fallback;
+  try {
+    return new URL(url, window.location.origin).href;
+  } catch {
+    return fallback;
+  }
+}
+
+function inferImageMimeType(url: string): string | undefined {
+  const clean = url.split('?')[0].toLowerCase();
+  if (clean.endsWith('.png')) return 'image/png';
+  if (clean.endsWith('.webp')) return 'image/webp';
+  if (clean.endsWith('.jpg') || clean.endsWith('.jpeg')) return 'image/jpeg';
+  return undefined;
+}
+
+function shuffleSongs<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
 export default function App() {
   const { isAdmin, getAuthHeaders } = useAdmin();
   const [songs, setSongs] = useState<Song[]>([]);
@@ -40,10 +67,12 @@ export default function App() {
   const [isCastModalOpen, setIsCastModalOpen] = useState<boolean>(false);
   const [isCreatorLoginOpen, setIsCreatorLoginOpen] = useState<boolean>(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState<boolean>(false);
+  const [songToEditInAdmin, setSongToEditInAdmin] = useState<Song | null>(null);
 
   // Audio element reference & current track id tracker for background sync
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentSongIdRef = useRef<string | null>(null);
+  const sessionOrderRef = useRef<string[]>([]);
   const initialDeepLinkHandledRef = useRef<boolean>(false);
   const probedUrlsRef = useRef<Set<string>>(new Set());
   const [resolvedDurations, setResolvedDurations] = useState<Record<string, number>>(() =>
@@ -52,6 +81,16 @@ export default function App() {
 
   const currentSong = currentSongIndex !== null ? songs[currentSongIndex] || null : null;
   currentSongIdRef.current = currentSong?.id ?? null;
+
+  const currentSongRef = useRef<Song | null>(currentSong);
+  currentSongRef.current = currentSong;
+  const durationRef = useRef<number>(duration);
+  durationRef.current = duration;
+  const lastMediaSessionPosUpdateRef = useRef<number>(0);
+  const handlePlayPauseRef = useRef<() => void>(() => {});
+  const handleNextRef = useRef<() => void>(() => {});
+  const handlePrevRef = useRef<() => void>(() => {});
+  const handleSeekRef = useRef<(time: number) => void>(() => {});
 
   // Fetch songs from server (Supabase / Vercel Blob / local JSON)
   const fetchSongs = async (preserveCurrentTrack = false) => {
@@ -65,7 +104,28 @@ export default function App() {
             ? { ...song, duration: cached[song.audioUrl] }
             : song
         );
-        setSongs(nextSongs);
+
+        let orderedSongs: Song[];
+        if (sessionOrderRef.current.length === 0) {
+          orderedSongs = shuffleSongs(nextSongs);
+          sessionOrderRef.current = orderedSongs.map((s) => s.id);
+        } else {
+          const orderMap = new Map(sessionOrderRef.current.map((id, idx) => [id, idx]));
+          const knownSongs: Song[] = [];
+          const newSongs: Song[] = [];
+          for (const song of nextSongs) {
+            if (orderMap.has(song.id)) {
+              knownSongs.push(song);
+            } else {
+              newSongs.push(song);
+            }
+          }
+          knownSongs.sort((a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0));
+          orderedSongs = [...newSongs, ...knownSongs];
+          sessionOrderRef.current = orderedSongs.map((s) => s.id);
+        }
+
+        setSongs(orderedSongs);
 
         // Support deep-linked shared track (?track=<id>) on initial load
         if (!initialDeepLinkHandledRef.current) {
@@ -73,7 +133,7 @@ export default function App() {
           const params = new URLSearchParams(window.location.search);
           const sharedTrackId = params.get('track');
           if (sharedTrackId) {
-            const idx = nextSongs.findIndex((s) => s.id === sharedTrackId);
+            const idx = orderedSongs.findIndex((s) => s.id === sharedTrackId);
             if (idx !== -1) {
               setCurrentSongIndex(idx);
               return;
@@ -82,7 +142,7 @@ export default function App() {
         }
 
         if (preserveCurrentTrack && currentSongIdRef.current) {
-          const preservedIdx = nextSongs.findIndex((s) => s.id === currentSongIdRef.current);
+          const preservedIdx = orderedSongs.findIndex((s) => s.id === currentSongIdRef.current);
           if (preservedIdx !== -1) {
             setCurrentSongIndex(preservedIdx);
           } else {
@@ -203,8 +263,11 @@ export default function App() {
     if (!audio) return;
 
     if (currentSong?.audioUrl) {
-      audio.src = currentSong.audioUrl;
-      audio.load();
+      if (audio.getAttribute('data-loaded-url') !== currentSong.audioUrl) {
+        audio.setAttribute('data-loaded-url', currentSong.audioUrl);
+        audio.src = currentSong.audioUrl;
+        audio.load();
+      }
       setCurrentTime(0);
       setDuration(resolvedDurations[currentSong.audioUrl] ?? currentSong.duration ?? 0);
       if (isPlaying) {
@@ -212,13 +275,14 @@ export default function App() {
       }
     } else {
       audio.pause();
+      audio.removeAttribute('data-loaded-url');
       audio.removeAttribute('src');
       audio.load();
       setCurrentTime(0);
       setDuration(0);
       setIsPlaying(false);
     }
-  }, [currentSong?.id]);
+  }, [currentSong?.id, currentSong?.audioUrl]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -226,9 +290,28 @@ export default function App() {
     audio.volume = isMuted ? 0 : volume;
   }, [volume, isMuted]);
 
+  const updateMediaSessionPosition = (pos: number, dur: number) => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    const ms = navigator.mediaSession;
+    if (typeof ms.setPositionState !== 'function') return;
+    if (!dur || !Number.isFinite(dur) || Number.isNaN(dur) || dur <= 0) return;
+    try {
+      ms.setPositionState({
+        duration: dur,
+        playbackRate: 1,
+        position: Math.min(Math.max(0, Number.isFinite(pos) ? pos : 0), dur),
+      });
+    } catch {
+      // Ignore transient invalid position values on some browsers
+    }
+  };
+
   const applyRealAudioDuration = (rawDuration: number) => {
     if (!rawDuration || isNaN(rawDuration) || rawDuration === Infinity || rawDuration <= 0) return;
     setDuration(rawDuration);
+    if (audioRef.current) {
+      updateMediaSessionPosition(audioRef.current.currentTime || 0, rawDuration);
+    }
     if (currentSong?.audioUrl) {
       const rounded = Math.round(rawDuration);
       saveCachedDuration(currentSong.audioUrl, rounded);
@@ -248,7 +331,17 @@ export default function App() {
   // Audio Event Handlers
   const handleTimeUpdate = () => {
     if (audioRef.current) {
-      setCurrentTime(audioRef.current.currentTime);
+      const t = audioRef.current.currentTime;
+      setCurrentTime(t);
+      const now = Date.now();
+      if (now - lastMediaSessionPosUpdateRef.current >= 1000) {
+        lastMediaSessionPosUpdateRef.current = now;
+        const d =
+          audioRef.current.duration && Number.isFinite(audioRef.current.duration)
+            ? audioRef.current.duration
+            : durationRef.current;
+        updateMediaSessionPosition(t, d);
+      }
     }
   };
 
@@ -344,8 +437,175 @@ export default function App() {
     if (audioRef.current) {
       audioRef.current.currentTime = time;
       setCurrentTime(time);
+      const d =
+        audioRef.current.duration && Number.isFinite(audioRef.current.duration)
+          ? audioRef.current.duration
+          : durationRef.current;
+      updateMediaSessionPosition(time, d);
     }
   };
+
+  handlePlayPauseRef.current = handlePlayPause;
+  handleNextRef.current = handleNext;
+  handlePrevRef.current = handlePrev;
+  handleSeekRef.current = handleSeek;
+
+  // Media Session API: show player + album cover on mobile lock screens and handle lock-screen controls
+  useEffect(() => {
+    if (
+      typeof navigator === 'undefined' ||
+      !('mediaSession' in navigator) ||
+      typeof MediaMetadata === 'undefined'
+    ) {
+      return;
+    }
+
+    const ms = navigator.mediaSession;
+    if (!currentSong) {
+      ms.metadata = null;
+      ms.playbackState = 'none';
+      return;
+    }
+
+    const artworkUrl = getAbsoluteArtworkUrl(currentSong.coverUrl || '/logo.jpg');
+    const artworkType = inferImageMimeType(artworkUrl);
+    const sizes = ['96x96', '128x128', '192x192', '256x256', '384x384', '512x512'];
+    const artwork: MediaImage[] = sizes.map((size) => ({
+      src: artworkUrl,
+      sizes: size,
+      ...(artworkType ? { type: artworkType } : {}),
+    }));
+
+    ms.metadata = new MediaMetadata({
+      title: currentSong.title || "Beto's Radio",
+      artist: currentSong.artist || "Beto's Radio",
+      album: currentSong.album || "Beto's Radio • AI Studio",
+      artwork,
+    });
+  }, [
+    currentSong?.id,
+    currentSong?.title,
+    currentSong?.artist,
+    currentSong?.album,
+    currentSong?.coverUrl,
+  ]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = !currentSong
+      ? 'none'
+      : isPlaying
+        ? 'playing'
+        : 'paused';
+
+    if (currentSong && audioRef.current) {
+      const d =
+        audioRef.current.duration && Number.isFinite(audioRef.current.duration)
+          ? audioRef.current.duration
+          : durationRef.current;
+      updateMediaSessionPosition(audioRef.current.currentTime || 0, d);
+    }
+  }, [isPlaying, currentSong?.id]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    const ms = navigator.mediaSession;
+
+    const actions: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
+      [
+        'play',
+        () => {
+          const audio = audioRef.current;
+          if (!currentSongRef.current) {
+            handlePlayPauseRef.current();
+            return;
+          }
+          if (audio) {
+            audio
+              .play()
+              .then(() => setIsPlaying(true))
+              .catch((err) => console.log('MediaSession play error:', err));
+          }
+        },
+      ],
+      [
+        'pause',
+        () => {
+          const audio = audioRef.current;
+          if (audio) audio.pause();
+          setIsPlaying(false);
+        },
+      ],
+      ['previoustrack', () => handlePrevRef.current()],
+      ['nexttrack', () => handleNextRef.current()],
+      [
+        'seekto',
+        (details) => {
+          if (typeof details.seekTime !== 'number') return;
+          const audio = audioRef.current as any;
+          if (details.fastSeek && audio && typeof audio.fastSeek === 'function') {
+            audio.fastSeek(details.seekTime);
+            setCurrentTime(details.seekTime);
+            updateMediaSessionPosition(details.seekTime, durationRef.current);
+          } else {
+            handleSeekRef.current(details.seekTime);
+          }
+        },
+      ],
+      [
+        'seekbackward',
+        (details) => {
+          const audio = audioRef.current;
+          if (!audio || !currentSongRef.current) return;
+          const offset = details.seekOffset || 10;
+          handleSeekRef.current(Math.max(0, audio.currentTime - offset));
+        },
+      ],
+      [
+        'seekforward',
+        (details) => {
+          const audio = audioRef.current;
+          if (!audio || !currentSongRef.current) return;
+          const offset = details.seekOffset || 10;
+          const maxDur =
+            audio.duration && Number.isFinite(audio.duration)
+              ? audio.duration
+              : durationRef.current || audio.currentTime + offset;
+          handleSeekRef.current(Math.min(maxDur, audio.currentTime + offset));
+        },
+      ],
+      [
+        'stop',
+        () => {
+          const audio = audioRef.current;
+          if (audio) {
+            audio.pause();
+            audio.currentTime = 0;
+          }
+          setCurrentTime(0);
+          setIsPlaying(false);
+        },
+      ],
+    ];
+
+    for (const [action, handler] of actions) {
+      try {
+        ms.setActionHandler(action, handler);
+      } catch {
+        // Ignore unsupported actions
+      }
+    }
+
+    return () => {
+      for (const [action] of actions) {
+        try {
+          ms.setActionHandler(action, null);
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, []);
 
   const handleSelectSong = (song: Song) => {
     const idx = songs.findIndex((s) => s.id === song.id);
@@ -366,6 +626,7 @@ export default function App() {
         headers: getAuthHeaders(),
       });
       const updated = songs.filter((s) => s.id !== id);
+      sessionOrderRef.current = sessionOrderRef.current.filter((itemId) => itemId !== id);
       setSongs(updated);
       if (currentSong?.id === id) {
         setCurrentSongIndex(null);
@@ -377,6 +638,10 @@ export default function App() {
   };
 
   const handleSongAdded = (newSong: Song, playNow: boolean) => {
+    sessionOrderRef.current = [
+      newSong.id,
+      ...sessionOrderRef.current.filter((id) => id !== newSong.id),
+    ];
     setSongs((prev) => [newSong, ...prev]);
     if (playNow) {
       setCurrentSongIndex(0);
@@ -453,6 +718,138 @@ export default function App() {
     }
   };
 
+  // Save LRC synced lyrics directly to Supabase/backend (Creator mode)
+  const handleSaveSyncedLyrics = async (songId: string, syncedLrcLyrics: string) => {
+    const res = await fetch(`/api/songs/${encodeURIComponent(songId)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({ lyrics: syncedLrcLyrics }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Falha ao salvar letra sincronizada.');
+    }
+    const data = await res.json();
+    if (data.song) {
+      setSongs((prev) => prev.map((s) => (s.id === songId ? data.song : s)));
+    } else {
+      setSongs((prev) =>
+        prev.map((s) => (s.id === songId ? { ...s, lyrics: syncedLrcLyrics } : s))
+      );
+    }
+  };
+
+  const [castFeedback, setCastFeedback] = useState<{
+    error?: string | null;
+    status?: string | null;
+  }>({});
+
+  const ensureTrackLoadedForCast = (): boolean => {
+    const audio = audioRef.current;
+    if (!audio) return false;
+    if (currentSong?.audioUrl) {
+      if (audio.getAttribute('data-loaded-url') !== currentSong.audioUrl) {
+        audio.setAttribute('data-loaded-url', currentSong.audioUrl);
+        audio.src = currentSong.audioUrl;
+        audio.load();
+      }
+      return true;
+    }
+    if (songs.length > 0 && songs[0]?.audioUrl) {
+      const firstSong = songs[0];
+      audio.setAttribute('data-loaded-url', firstSong.audioUrl);
+      audio.src = firstSong.audioUrl;
+      audio.load();
+      setCurrentSongIndex(0);
+      return true;
+    }
+    return false;
+  };
+
+  // Direct Cast trigger from the Cast button (sends directly on Android / Chrome / AirPlay)
+  const handleDirectCast = async () => {
+    setCastFeedback({});
+
+    if (isCastActive) {
+      setIsCastModalOpen(true);
+      return;
+    }
+
+    const audio = audioRef.current as any;
+    const w = window as any;
+    const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+    const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
+
+    try {
+      // 1. Android Chrome: W3C Remote Playback opens native Android device picker directly
+      if (isAndroid && audio?.remote && typeof audio.remote.prompt === 'function') {
+        const hadSrc = Boolean(audio.currentSrc);
+        const hasTrack = ensureTrackLoadedForCast();
+        if (!hadSrc && hasTrack) {
+          await new Promise((r) => window.setTimeout(r, 80));
+        }
+        await audio.remote.prompt();
+        return;
+      }
+
+      // 2. Desktop Chrome: Google Cast Web Sender SDK
+      const context = w.cast?.framework?.CastContext?.getInstance?.();
+      if (context && typeof context.requestSession === 'function') {
+        await context.requestSession();
+        return;
+      }
+
+      // 3. Fallback W3C Remote Playback (Android / Edge / Chrome)
+      if (audio?.remote && typeof audio.remote.prompt === 'function') {
+        const hadSrc = Boolean(audio.currentSrc);
+        const hasTrack = ensureTrackLoadedForCast();
+        if (!hadSrc && hasTrack) {
+          await new Promise((r) => window.setTimeout(r, 80));
+        }
+        await audio.remote.prompt();
+        return;
+      }
+
+      // 4. Apple Safari / iOS AirPlay Picker
+      if (audio && typeof audio.webkitShowPlaybackTargetPicker === 'function') {
+        ensureTrackLoadedForCast();
+        audio.webkitShowPlaybackTargetPicker();
+        return;
+      }
+
+      setCastFeedback({
+        error: isInIframe
+          ? 'O navegador bloqueia a descoberta de Chromecast dentro do iframe de preview. Abra diretamente em https://betosradio.com no Chrome ou Safari.'
+          : null,
+      });
+      setIsCastModalOpen(true);
+    } catch (err: any) {
+      const code = err?.code || err?.name || '';
+      const msg = String(err?.message || err || '');
+      if (code === 'cancel' || code === 'AbortError' || /cancel|abort/i.test(msg)) {
+        return;
+      }
+
+      let friendlyError = `Não foi possível abrir o Cast automaticamente (${msg || 'recurso indisponível'}).`;
+      if (/no_devices_found|NotFoundError/i.test(`${code} ${msg}`)) {
+        friendlyError =
+          'Nenhum Chromecast/TV encontrado no mesmo Wi-Fi. Verifique se o celular/PC e a TV estão na mesma rede.';
+      } else if (/InvalidStateError|NotSupportedError/i.test(`${code} ${msg}`)) {
+        friendlyError =
+          'Dê Play em uma música primeiro e toque em Cast novamente, ou use o menu ⋮ → Transmitir do Chrome.';
+      } else if (/NotAllowedError|SecurityError/i.test(`${code} ${msg}`) || isInIframe) {
+        friendlyError =
+          'O navegador bloqueou o Cast nesta janela. Acesse diretamente em https://betosradio.com no Chrome.';
+      }
+
+      setCastFeedback({ error: friendlyError });
+      setIsCastModalOpen(true);
+    }
+  };
+
   // Creator Area handler
   const handleOpenCreatorArea = () => {
     if (isAdmin) {
@@ -474,13 +871,15 @@ export default function App() {
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         preload="auto"
+        playsInline
+        {...({ 'x-webkit-airplay': 'allow' } as Record<string, string>)}
       />
 
       {/* Main Container */}
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 md:py-8 flex-1 flex flex-col">
         {/* Top Header Bar (Only Cast and Área do Criador buttons) */}
         <StationHeader
-          onOpenCast={() => setIsCastModalOpen(true)}
+          onOpenCast={handleDirectCast}
           onOpenCreatorArea={handleOpenCreatorArea}
           isCreatorMode={isAdmin}
           isCastActive={isCastActive}
@@ -512,7 +911,7 @@ export default function App() {
             onToggleShuffle={() => setIsShuffle(!isShuffle)}
             onToggleRepeat={() => setIsRepeat(!isRepeat)}
             onToggleRadioMode={() => setIsRadioMode(!isRadioMode)}
-            onOpenCast={() => setIsCastModalOpen(true)}
+            onOpenCast={handleDirectCast}
             onOpenComposer={handleOpenCreatorArea}
             onOpenBandModal={handleOpenCreatorArea}
             isLiked={currentSong ? likedSongIds.includes(currentSong.id) : false}
@@ -537,6 +936,8 @@ export default function App() {
               artist={currentSong?.artist}
               hasSong={Boolean(currentSong)}
               songId={currentSong?.id}
+              isAdmin={isAdmin}
+              onSaveSyncedLyrics={handleSaveSyncedLyrics}
             />
           </div>
 
@@ -552,6 +953,14 @@ export default function App() {
               sharedSongId={sharedSongId}
               onSelectSong={handleSelectSong}
               onDeleteSong={handleDeleteSong}
+              onEditSong={(song) => {
+                setSongToEditInAdmin(song);
+                if (isAdmin) {
+                  setIsAdminPanelOpen(true);
+                } else {
+                  setIsCreatorLoginOpen(true);
+                }
+              }}
               onToggleLike={handleToggleLike}
               onShareSong={handleShareSong}
               onRefreshSongs={() => fetchSongs(true)}
@@ -575,9 +984,17 @@ export default function App() {
       {/* Modals */}
       <CastModal
         isOpen={isCastModalOpen}
-        onClose={() => setIsCastModalOpen(false)}
+        onClose={() => {
+          setIsCastModalOpen(false);
+          setCastFeedback({});
+        }}
         audioRef={audioRef}
-        currentTrackTitle={currentSong?.title}
+        currentSong={currentSong}
+        isPlaying={isPlaying}
+        onCastActiveChange={setIsCastActive}
+        externalError={castFeedback.error}
+        externalStatus={castFeedback.status}
+        onEnsureTrackLoaded={ensureTrackLoadedForCast}
       />
 
       <CreatorLoginModal
@@ -590,14 +1007,21 @@ export default function App() {
 
       <AdminPanelModal
         isOpen={isAdminPanelOpen}
-        onClose={() => setIsAdminPanelOpen(false)}
+        onClose={() => {
+          setIsAdminPanelOpen(false);
+          setSongToEditInAdmin(null);
+        }}
         songs={songs}
         onSongAdded={handleSongAdded}
         onSongUpdated={(updated) => {
           setSongs((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
         }}
+        initialEditSong={songToEditInAdmin}
+        onClearInitialEdit={() => setSongToEditInAdmin(null)}
         onCatalogReplaced={(updatedSongs) => {
-          setSongs(updatedSongs);
+          const shuffled = shuffleSongs(updatedSongs);
+          sessionOrderRef.current = shuffled.map((s) => s.id);
+          setSongs(shuffled);
           setCurrentSongIndex(null);
           setIsPlaying(false);
         }}

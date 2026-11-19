@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Download,
   Sparkles,
@@ -22,13 +22,15 @@ import {
   Database,
   Copy,
   RefreshCw,
+  Search,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useAdmin } from '../context/AdminContext';
 import { Song, BandInfo, GeneratedComposition } from '../types/song';
 import { SunoDownloaderModal } from './SunoDownloaderModal';
 import { GeminiComposerModal } from './GeminiComposerModal';
 import { NanoBananaBandModal } from './NanoBananaBandModal';
-import { uploadSongViaVercelBlob } from '../utils/blobClientUpload';
+import { uploadSongViaVercelBlob, uploadMediaAsset } from '../utils/blobClientUpload';
 
 interface AdminPanelModalProps {
   isOpen: boolean;
@@ -41,6 +43,8 @@ interface AdminPanelModalProps {
   onDeleteSong: (id: string) => void;
   onSelectSong: (song: Song) => void;
   currentSong: Song | null;
+  initialEditSong?: Song | null;
+  onClearInitialEdit?: () => void;
 }
 
 export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
@@ -54,6 +58,8 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
   onDeleteSong,
   onSelectSong,
   currentSong,
+  initialEditSong,
+  onClearInitialEdit,
 }) => {
   const { logout, getAuthHeaders } = useAdmin();
   const [activeTab, setActiveTab] = useState<'suno' | 'gemini' | 'banana' | 'catalog' | 'supabase'>('suno');
@@ -63,15 +69,31 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
   const [isGeminiSubModal, setIsGeminiSubModal] = useState(false);
   const [isBananaSubModal, setIsBananaSubModal] = useState(false);
 
-  // Edit song state
+  // Edit song state (all fields editable)
   const [editingSong, setEditingSong] = useState<Song | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editArtist, setEditArtist] = useState('');
+  const [editAlbum, setEditAlbum] = useState('');
   const [editMood, setEditMood] = useState('Contemplativo & Melancólico');
   const [editRhythm, setEditRhythm] = useState('Andante (96 BPM)');
   const [editStyle, setEditStyle] = useState('');
   const [editLyrics, setEditLyrics] = useState('');
+  const [editNanoBananaPrompt, setEditNanoBananaPrompt] = useState('');
+  const [editSourceUrl, setEditSourceUrl] = useState('');
+  const [editCoverUrl, setEditCoverUrl] = useState('');
+  const [editBandPhotoUrl, setEditBandPhotoUrl] = useState('');
+  const [editAudioUrl, setEditAudioUrl] = useState('');
+  const [editAudioFile, setEditAudioFile] = useState<File | null>(null);
+  const [editCoverFile, setEditCoverFile] = useState<File | null>(null);
+  const [editBandPhotoFile, setEditBandPhotoFile] = useState<File | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editStage, setEditStage] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [catalogFeedback, setCatalogFeedback] = useState<string | null>(null);
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [lastUploadedSong, setLastUploadedSong] = useState<Song | null>(null);
+  const [editCoverPreviewUrl, setEditCoverPreviewUrl] = useState<string | null>(null);
+  const [editBandPhotoPreviewUrl, setEditBandPhotoPreviewUrl] = useState<string | null>(null);
 
   // Direct MP3 upload state inside Admin Panel
   const [directAudioFile, setDirectAudioFile] = useState<File | null>(null);
@@ -250,6 +272,56 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
     }
   };
 
+  const handleStartEdit = (song: Song) => {
+    setEditingSong(song);
+    setEditTitle(song.title || '');
+    setEditArtist(song.artist || '');
+    setEditAlbum(song.album || '');
+    setEditMood(song.mood || 'Contemplativo & Melancólico');
+    setEditRhythm(song.rhythm || 'Andante (96 BPM)');
+    setEditStyle(song.stylePrompt || '');
+    setEditLyrics(song.lyrics || '');
+    setEditNanoBananaPrompt(song.nanoBananaPrompt || song.bandInfo?.nanoBananaMainPrompt || '');
+    setEditSourceUrl(song.sourceUrl || '');
+    setEditCoverUrl(song.coverUrl || '');
+    setEditBandPhotoUrl(song.bandPhotoUrl || '');
+    setEditAudioUrl(song.audioUrl || '');
+    setEditAudioFile(null);
+    setEditCoverFile(null);
+    setEditBandPhotoFile(null);
+    setEditError(null);
+    setEditStage(null);
+    setCatalogFeedback(null);
+  };
+
+  useEffect(() => {
+    if (isOpen && initialEditSong) {
+      setActiveTab('catalog');
+      handleStartEdit(initialEditSong);
+      onClearInitialEdit?.();
+    }
+  }, [isOpen, initialEditSong, onClearInitialEdit]);
+
+  useEffect(() => {
+    if (!editCoverFile) {
+      setEditCoverPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(editCoverFile);
+    setEditCoverPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [editCoverFile]);
+
+  useEffect(() => {
+    if (!editBandPhotoFile) {
+      setEditBandPhotoPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(editBandPhotoFile);
+    setEditBandPhotoPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [editBandPhotoFile]);
+
   if (!isOpen) return null;
 
   const handleLogout = () => {
@@ -297,6 +369,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
           ? 'Áudio salvo com sucesso no Vercel Blob (acesso público) e adicionado à Rádio!'
           : 'Áudio e dados salvos com sucesso no servidor da rádio!'
       );
+      setLastUploadedSong(song);
       onSongAdded(song, true);
       setDirectAudioFile(null);
       setDirectCoverFile(null);
@@ -314,54 +387,89 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
     }
   };
 
-  const handleStartEdit = (song: Song) => {
-    setEditingSong(song);
-    setEditTitle(song.title);
-    setEditArtist(song.artist);
-    setEditMood(song.mood || 'Contemplativo & Melancólico');
-    setEditRhythm(song.rhythm || 'Andante (96 BPM)');
-    setEditStyle(song.stylePrompt || '');
-    setEditLyrics(song.lyrics || '');
-  };
-
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingSong) return;
 
     setSavingEdit(true);
+    setEditError(null);
+    setEditStage('Preparando alterações...');
     try {
-      const updatedData = {
+      const authHeaders = getAuthHeaders();
+      let nextAudioUrl = editAudioUrl.trim() || editingSong.audioUrl;
+      let nextDuration = editingSong.duration;
+      let nextCoverUrl = editCoverUrl.trim() || editingSong.coverUrl;
+      let nextBandPhotoUrl = editBandPhotoUrl.trim() || editingSong.bandPhotoUrl || '';
+
+      if (editAudioFile) {
+        setEditStage('Enviando novo arquivo de áudio...');
+        const uploadedAudio = await uploadMediaAsset(editAudioFile, 'tracks', authHeaders, (pct) => {
+          setEditStage(`Enviando novo áudio (${pct}%)...`);
+        });
+        nextAudioUrl = uploadedAudio.url;
+        if (uploadedAudio.duration && uploadedAudio.duration > 0) {
+          nextDuration = uploadedAudio.duration;
+        }
+      }
+
+      if (editCoverFile) {
+        setEditStage('Enviando nova imagem de capa...');
+        const uploadedCover = await uploadMediaAsset(editCoverFile, 'covers', authHeaders);
+        nextCoverUrl = uploadedCover.url;
+      }
+
+      if (editBandPhotoFile) {
+        setEditStage('Enviando nova foto da banda...');
+        const uploadedBand = await uploadMediaAsset(editBandPhotoFile, 'covers', authHeaders);
+        nextBandPhotoUrl = uploadedBand.url;
+      }
+
+      setEditStage('Salvando alterações no banco de dados...');
+      const updatedData: Song = {
         ...editingSong,
         title: editTitle.trim() || editingSong.title,
         artist: editArtist.trim() || editingSong.artist,
+        album: editAlbum.trim() || 'Estúdio Original',
         mood: editMood.trim() || 'Contemplativo & Melancólico',
         rhythm: editRhythm.trim() || 'Andante (96 BPM)',
         stylePrompt: editStyle.trim(),
         lyrics: editLyrics.trim(),
+        audioUrl: nextAudioUrl,
+        coverUrl: nextCoverUrl,
+        duration: nextDuration,
+        ...(nextBandPhotoUrl ? { bandPhotoUrl: nextBandPhotoUrl } : { bandPhotoUrl: undefined }),
+        ...(editNanoBananaPrompt.trim() ? { nanoBananaPrompt: editNanoBananaPrompt.trim() } : {}),
+        ...(editSourceUrl.trim() ? { sourceUrl: editSourceUrl.trim() } : {}),
       };
 
-      const res = await fetch(`/api/songs/${editingSong.id}`, {
+      const res = await fetch(`/api/songs/${encodeURIComponent(editingSong.id)}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
+          ...authHeaders,
         },
         body: JSON.stringify(updatedData),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || 'Erro ao atualizar música.');
       }
 
+      const savedSong = (data.song as Song) || updatedData;
       if (onSongUpdated) {
-        onSongUpdated(data.song);
+        onSongUpdated(savedSong);
       }
+      if (lastUploadedSong?.id === savedSong.id) {
+        setLastUploadedSong(savedSong);
+      }
+      setCatalogFeedback(`Dados da faixa "${savedSong.title}" atualizados com sucesso!`);
       setEditingSong(null);
     } catch (err: any) {
-      alert(err.message || 'Erro ao salvar alterações.');
+      setEditError(err?.message || 'Erro ao salvar alterações.');
     } finally {
       setSavingEdit(false);
+      setEditStage(null);
     }
   };
 
@@ -389,7 +497,20 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {currentSong && (
+              <button
+                onClick={() => {
+                  setActiveTab('catalog');
+                  handleStartEdit(currentSong);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 text-xs font-mono-code font-bold border border-cyan-400/40 transition-all"
+                title={`Editar dados de "${currentSong.title}"`}
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Editar Faixa Atual</span>
+              </button>
+            )}
             <button
               onClick={handleLogout}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 text-xs font-mono-code border border-red-500/30 transition-all"
@@ -498,9 +619,21 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                 </div>
 
                 {uploadMsg && (
-                  <div className="p-3 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-mono-code flex items-center gap-2">
-                    <Check className="w-4 h-4 flex-shrink-0" />
-                    <span>{uploadMsg}</span>
+                  <div className="p-3 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-mono-code flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Check className="w-4 h-4 flex-shrink-0" />
+                      <span>{uploadMsg}</span>
+                    </div>
+                    {lastUploadedSong && (
+                      <button
+                        type="button"
+                        onClick={() => handleStartEdit(lastUploadedSong)}
+                        className="px-3 py-1 rounded-lg bg-cyan-500/25 hover:bg-cyan-500/35 text-cyan-200 border border-cyan-400/40 flex items-center gap-1.5 font-bold"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Editar dados desta faixa</span>
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -748,67 +881,111 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
           {/* TAB 4: CATALOG */}
           {activeTab === 'catalog' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <h3 className="text-sm font-bold font-heading text-white">
                   Acervo Completo da Rádio ({songs.length} faixas)
                 </h3>
+                <div className="relative w-full sm:w-72">
+                  <Search className="w-3.5 h-3.5 text-white/40 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="Buscar faixa, artista ou álbum..."
+                    value={catalogSearch}
+                    onChange={(e) => setCatalogSearch(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 rounded-xl bg-black/40 border border-white/15 text-xs text-white font-mono-code placeholder:text-white/30 focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
               </div>
 
+              {catalogFeedback && (
+                <div className="p-3 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-mono-code flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Check className="w-4 h-4 flex-shrink-0" />
+                    <span>{catalogFeedback}</span>
+                  </div>
+                  <button
+                    onClick={() => setCatalogFeedback(null)}
+                    className="text-emerald-200/70 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               <div className="space-y-2">
-                {songs.map((song) => {
-                  const isCurrent = currentSong?.id === song.id;
-                  return (
-                    <div
-                      key={song.id}
-                      className={`flex items-center justify-between p-3 rounded-xl border transition-all ${
-                        isCurrent
-                          ? 'bg-purple-950/40 border-purple-500/50'
-                          : 'bg-white/5 border-white/5 hover:border-white/15'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <img
-                          src={song.coverUrl}
-                          alt={song.title}
-                          className="w-12 h-12 rounded-lg object-cover flex-shrink-0 border border-white/10"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                        <div className="min-w-0">
-                          <h4 className="text-xs font-bold text-white truncate">{song.title}</h4>
-                          <p className="text-[11px] text-white/50 truncate font-mono-code">{song.artist}</p>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-purple-300 font-mono-code">
-                            {song.mood || 'Contemplativo'}
-                          </span>
+                {songs
+                  .filter((song) => {
+                    const q = catalogSearch.trim().toLowerCase();
+                    if (!q) return true;
+                    return (
+                      song.title.toLowerCase().includes(q) ||
+                      song.artist.toLowerCase().includes(q) ||
+                      (song.album && song.album.toLowerCase().includes(q)) ||
+                      (song.mood && song.mood.toLowerCase().includes(q))
+                    );
+                  })
+                  .map((song) => {
+                    const isCurrent = currentSong?.id === song.id;
+                    const durMins = song.duration ? Math.floor(song.duration / 60) : 0;
+                    const durSecs = song.duration ? Math.floor(song.duration % 60) : 0;
+                    const durLabel =
+                      song.duration && song.duration > 0
+                        ? `${durMins}:${durSecs < 10 ? '0' : ''}${durSecs}`
+                        : '--:--';
+                    return (
+                      <div
+                        key={song.id}
+                        className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl border transition-all ${
+                          isCurrent
+                            ? 'bg-purple-950/40 border-purple-500/50'
+                            : 'bg-white/5 border-white/5 hover:border-white/15'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <img
+                            src={song.coverUrl || '/logo.jpg'}
+                            alt={song.title}
+                            className="w-12 h-12 rounded-lg object-cover flex-shrink-0 border border-white/10"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = '/logo.jpg';
+                            }}
+                          />
+                          <div className="min-w-0">
+                            <h4 className="text-xs font-bold text-white truncate">{song.title}</h4>
+                            <p className="text-[11px] text-white/50 truncate font-mono-code">
+                              {song.artist} • {song.album || 'Estúdio Original'} • {durLabel}
+                            </p>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-purple-300 font-mono-code">
+                              {song.mood || 'Contemplativo'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                          <button
+                            onClick={() => handleStartEdit(song)}
+                            className="px-3 py-1.5 rounded-lg bg-cyan-600/25 hover:bg-cyan-600/40 text-cyan-300 text-xs font-mono-code font-bold border border-cyan-500/40 flex items-center gap-1 transition-all"
+                            title="Editar todos os dados da música"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" /> Editar
+                          </button>
+                          <button
+                            onClick={() => onSelectSong(song)}
+                            className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-mono-code font-bold"
+                          >
+                            Tocar
+                          </button>
+                          <button
+                            onClick={() => onDeleteSong(song.id)}
+                            className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors"
+                            title="Excluir música"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleStartEdit(song)}
-                          className="px-3 py-1.5 rounded-lg bg-cyan-600/25 hover:bg-cyan-600/40 text-cyan-300 text-xs font-mono-code font-bold border border-cyan-500/40 flex items-center gap-1 transition-all"
-                          title="Editar letra e estilo da música"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" /> Editar
-                        </button>
-                        <button
-                          onClick={() => onSelectSong(song)}
-                          className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-mono-code font-bold"
-                        >
-                          Tocar
-                        </button>
-                        <button
-                          onClick={() => onDeleteSong(song.id)}
-                          className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors"
-                          title="Excluir música"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
               </div>
             </div>
           )}
@@ -969,7 +1146,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
       {/* Edit Song Modal */}
       {editingSong && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fade-in overflow-y-auto">
-          <div className="relative w-full max-w-2xl rounded-3xl glass-panel-elevated p-6 md:p-8 border border-white/25 text-white shadow-2xl my-6">
+          <div className="relative w-full max-w-3xl rounded-3xl glass-panel-elevated p-6 md:p-8 border border-white/25 text-white shadow-2xl my-6 max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setEditingSong(null)}
               className="absolute top-4 right-4 p-2 rounded-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
@@ -977,22 +1154,137 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
               <X className="w-4 h-4" />
             </button>
 
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/25">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/25 flex-shrink-0">
                 <Edit3 className="w-6 h-6 text-black" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <h3 className="text-lg font-bold font-heading tracking-wide text-cyan-200">
-                  Editar Música • Acervo
+                  Editar Dados da Música
                 </h3>
-                <p className="text-xs text-white/60 font-mono-code">
-                  Atualize a letra, humor, ritmo e estilo da faixa: {editingSong.title}
+                <p className="text-xs text-white/60 font-mono-code truncate">
+                  Edite áudio, capa, foto da banda, álbum, humor, ritmo, estilo e letra de: {editingSong.title}
                 </p>
               </div>
             </div>
 
+            {editError && (
+              <div className="mb-4 p-3 rounded-xl bg-red-500/20 border border-red-500/40 text-red-300 text-xs font-mono-code flex items-center gap-2">
+                <X className="w-4 h-4 flex-shrink-0" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            {savingEdit && editStage && (
+              <div className="mb-4 p-3 rounded-xl bg-cyan-500/15 border border-cyan-500/35 text-cyan-200 text-xs font-mono-code flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin flex-shrink-0" />
+                <span>{editStage}</span>
+              </div>
+            )}
+
             <form onSubmit={handleSaveEdit} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Media Assets Section (Cover, Band Photo, Audio) */}
+              <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-4">
+                <p className="text-[11px] font-mono-code uppercase tracking-wider text-cyan-300 font-bold flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5" /> Arquivos de Mídia (Substituir ou alterar URL)
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Cover edit */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono-code text-purple-300">Imagem de Capa</label>
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={editCoverPreviewUrl || editCoverUrl || '/logo.jpg'}
+                        alt="Capa"
+                        className="w-14 h-14 rounded-xl object-cover border border-white/15 flex-shrink-0 bg-neutral-900"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = '/logo.jpg';
+                        }}
+                      />
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => setEditCoverFile(e.target.files?.[0] || null)}
+                          className="w-full text-[11px] text-white file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-bold file:bg-purple-600 file:text-white hover:file:bg-purple-500 file:cursor-pointer bg-black/40 p-1.5 rounded-xl border border-white/10"
+                        />
+                        <input
+                          type="url"
+                          placeholder="Ou cole a URL da capa (https://...)"
+                          value={editCoverUrl}
+                          onChange={(e) => setEditCoverUrl(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-white/80 font-mono-code focus:outline-none focus:border-purple-400"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Band photo edit */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono-code text-amber-300">Foto da Banda / Integrantes</label>
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={editBandPhotoPreviewUrl || editBandPhotoUrl || editCoverUrl || '/logo.jpg'}
+                        alt="Banda"
+                        className="w-14 h-14 rounded-xl object-cover border border-white/15 flex-shrink-0 bg-neutral-900"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = '/logo.jpg';
+                        }}
+                      />
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => setEditBandPhotoFile(e.target.files?.[0] || null)}
+                          className="w-full text-[11px] text-white file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-bold file:bg-amber-600 file:text-black hover:file:bg-amber-500 file:cursor-pointer bg-black/40 p-1.5 rounded-xl border border-white/10"
+                        />
+                        <input
+                          type="url"
+                          placeholder="URL da foto da banda (opcional)"
+                          value={editBandPhotoUrl}
+                          onChange={(e) => setEditBandPhotoUrl(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-white/80 font-mono-code focus:outline-none focus:border-amber-400"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Audio replacement */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block text-xs font-mono-code text-cyan-300 mb-1">
+                      Substituir Áudio (MP3 / WAV / FLAC)
+                    </label>
+                    <input
+                      type="file"
+                      accept="audio/*"
+                      onChange={(e) => setEditAudioFile(e.target.files?.[0] || null)}
+                      className="w-full text-[11px] text-white file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-bold file:bg-cyan-500 file:text-black hover:file:bg-cyan-400 file:cursor-pointer bg-black/40 p-1.5 rounded-xl border border-white/10"
+                    />
+                    {editAudioFile && (
+                      <span className="block text-[10px] text-cyan-300 font-mono-code mt-1">
+                        Novo arquivo selecionado: {editAudioFile.name}
+                      </span>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-mono-code text-white/70 mb-1">
+                      URL do Áudio Atual
+                    </label>
+                    <input
+                      type="text"
+                      value={editAudioUrl}
+                      onChange={(e) => setEditAudioUrl(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-[11px] text-white/80 font-mono-code focus:outline-none focus:border-cyan-400"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Metadata Fields */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-mono-code text-white/70 mb-1">Título da Música</label>
                   <input
@@ -1014,11 +1306,22 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                     className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/10 text-xs text-white font-mono-code focus:outline-none focus:border-cyan-400"
                   />
                 </div>
+
+                <div>
+                  <label className="block text-xs font-mono-code text-white/70 mb-1">Álbum / Coleção</label>
+                  <input
+                    type="text"
+                    value={editAlbum}
+                    onChange={(e) => setEditAlbum(e.target.value)}
+                    placeholder="Ex: Estúdio Original"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/10 text-xs text-white font-mono-code focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-mono-code text-cyan-300 mb-1">Humor / Estilo (Ex: Contemplativo & Melancólico)</label>
+                  <label className="block text-xs font-mono-code text-cyan-300 mb-1">Humor / Clima</label>
                   <input
                     type="text"
                     value={editMood}
@@ -1028,7 +1331,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono-code text-amber-300 mb-1">Ritmo / Andamento (Ex: Andante (96 BPM))</label>
+                  <label className="block text-xs font-mono-code text-amber-300 mb-1">Ritmo / Andamento</label>
                   <input
                     type="text"
                     value={editRhythm}
@@ -1038,20 +1341,66 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                 </div>
               </div>
 
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-mono-code text-white/70 mb-1">Estilo Musical / Prompt</label>
+                  <input
+                    type="text"
+                    value={editStyle}
+                    onChange={(e) => setEditStyle(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/10 text-xs text-white font-mono-code focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono-code text-white/70 mb-1">Link de Origem (Suno / Referência)</label>
+                  <input
+                    type="text"
+                    value={editSourceUrl}
+                    onChange={(e) => setEditSourceUrl(e.target.value)}
+                    placeholder="https://suno.com/song/..."
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/10 text-xs text-white font-mono-code focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+              </div>
+
               <div>
-                <label className="block text-xs font-mono-code text-white/70 mb-1">Estilo Musical / Prompt Suno</label>
+                <label className="block text-xs font-mono-code text-white/70 mb-1">Prompt para Nano Banana (Capa/Banda)</label>
                 <input
                   type="text"
-                  value={editStyle}
-                  onChange={(e) => setEditStyle(e.target.value)}
+                  value={editNanoBananaPrompt}
+                  onChange={(e) => setEditNanoBananaPrompt(e.target.value)}
+                  placeholder="Ex: Cinematic analog band portrait --ar 16:9"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/10 text-xs text-white font-mono-code focus:outline-none focus:border-cyan-400"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-mono-code text-purple-300 mb-1">Letra da Música (com tags [Verse], [Chorus] etc.)</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-mono-code text-purple-300">
+                    Letra da Música (com tags [Verse], [Chorus] ou timestamps LRC)
+                  </label>
+                  <label className="cursor-pointer text-[11px] font-mono-code text-cyan-300 hover:underline flex items-center gap-1 bg-cyan-500/10 px-2.5 py-1 rounded-lg border border-cyan-500/30">
+                    <Upload className="w-3 h-3" /> Importar .txt / .lrc
+                    <input
+                      type="file"
+                      accept=".txt,.lrc,text/plain"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (evt) => {
+                            setEditLyrics(String(evt.target?.result || ''));
+                          };
+                          reader.readAsText(file);
+                        }
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
                 <textarea
-                  rows={6}
+                  rows={7}
                   value={editLyrics}
                   onChange={(e) => setEditLyrics(e.target.value)}
                   className="w-full p-3.5 rounded-xl bg-black/50 border border-purple-500/30 text-xs text-white font-mono-code focus:outline-none focus:border-purple-400 resize-y leading-relaxed"

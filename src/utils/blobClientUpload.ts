@@ -157,6 +157,64 @@ async function uploadFileToSupabaseSignedUrl(
   return signData.publicUrl as string;
 }
 
+export async function uploadMediaAsset(
+  file: File,
+  folder: 'tracks' | 'covers',
+  authHeaders: Record<string, string>,
+  onProgress?: (pct: number) => void
+): Promise<{ url: string; duration?: number }> {
+  const isAudio = folder === 'tracks';
+  const duration = isAudio ? await getAudioDurationFromFile(file) : undefined;
+  const health = await fetchHealthStatus();
+  const contentType = isAudio ? inferAudioContentType(file) : inferImageContentType(file);
+
+  if (health.supabaseWriteConfigured) {
+    const url = await uploadFileToSupabaseSignedUrl(
+      file,
+      folder,
+      contentType,
+      authHeaders,
+      onProgress
+    );
+    return { url, ...(duration ? { duration } : {}) };
+  }
+
+  if (health.blobConfigured) {
+    const blob = await upload(`${folder}/${sanitizeFilename(file.name)}`, file, {
+      access: 'public',
+      handleUploadUrl: '/api/blob/upload',
+      headers: authHeaders,
+      contentType,
+      multipart: file.size > 4 * 1024 * 1024,
+      onUploadProgress: ({ percentage }) => onProgress?.(Math.round(percentage)),
+    });
+    return { url: blob.url, ...(duration ? { duration } : {}) };
+  }
+
+  if (health.supabaseConfigured && !health.supabaseWriteConfigured) {
+    throw new Error(
+      `Supabase conectado apenas em leitura (chave atual: ${health.supabaseKeyRole || 'desconhecida'}). Configure SUPABASE_SECRET_KEY para enviar novos arquivos.`
+    );
+  }
+
+  // Local dev fallback
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('folder', folder);
+
+  const res = await fetch('/api/upload-asset', {
+    method: 'POST',
+    headers: authHeaders,
+    body: formData,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.url) {
+    throw new Error(data?.error || `Falha ao enviar arquivo (HTTP ${res.status}).`);
+  }
+  onProgress?.(100);
+  return { url: data.url, ...(duration ? { duration } : {}) };
+}
+
 export async function uploadSongViaVercelBlob(
   input: BlobSongUploadInput
 ): Promise<{ song: Song; viaBlob: boolean; viaSupabase?: boolean }> {

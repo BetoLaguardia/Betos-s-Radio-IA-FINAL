@@ -56,6 +56,9 @@
     </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#08090d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Beto's Radio - Som Retrô-Futurista & Hi-Fi</title>
     <link rel="icon" type="image/jpeg" href="/logo.jpg" />
     <link rel="canonical" href="https://betosradio.com/" />
@@ -70,6 +73,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <script>
+      window.__onGCastApiAvailable = function (isAvailable) {
+        window.__gCastAvailable = Boolean(isAvailable);
+        window.dispatchEvent(new CustomEvent('gcast-ready', { detail: { isAvailable: Boolean(isAvailable) } }));
+      };
+    </script>
+    <script src="https://www.gstatic.com/cv/js/sender/v1/cast_framework.js?loadCastFramework=1" async defer></script>
   </head>
   <body>
     <div id="root"></div>

@@ -57,7 +57,7 @@ export const StationHeader: React.FC<StationHeaderProps> = ({
         {/* Cast Device Button (Public) */}
         <button
           onClick={onOpenCast}
-          title="Transmitir áudio para smart speakers"
+          title="Transmitir diretamente para TV, Chromecast ou outros dispositivos"
           className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-mono-code font-bold transition-all border ${
             isCastActive
               ? 'bg-cyan-500/25 text-cyan-300 border-cyan-400'

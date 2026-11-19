@@ -1,115 +1,458 @@
-import React, { useState } from 'react';
-import { Cast, Tv, Radio, Speaker, Volume2, Wifi, Check, X, ShieldCheck } from 'lucide-react';
-import { CastDevice } from '../types/song';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  Cast,
+  Tv,
+  Radio,
+  Speaker,
+  Volume2,
+  Wifi,
+  X,
+  ShieldCheck,
+  Bluetooth,
+  AlertTriangle,
+  RefreshCw,
+} from 'lucide-react';
+import { Song } from '../types/song';
 
 interface CastModalProps {
   isOpen: boolean;
   onClose: () => void;
   audioRef: React.RefObject<HTMLAudioElement | null>;
-  currentTrackTitle?: string;
+  currentSong: Song | null;
+  isPlaying: boolean;
+  onCastActiveChange: (active: boolean) => void;
+  externalError?: string | null;
+  externalStatus?: string | null;
+  onEnsureTrackLoaded?: () => boolean;
 }
 
-const DEFAULT_DEVICES: CastDevice[] = [
-  {
-    id: 'chromecast-living-room',
-    name: 'Google Chromecast Ultra (Home Theater)',
-    type: 'chromecast',
-    location: 'Sala de Estar',
-    quality: 'FLAC 24-bit / 96kHz',
-    connected: false,
-  },
-  {
-    id: 'nest-audio-studio',
-    name: 'Google Nest Audio Hi-Fi',
-    type: 'nest_speaker',
-    location: 'Estúdio Principal',
-    quality: 'HD Audio 320 kbps',
-    connected: false,
-  },
-  {
-    id: 'soundbar-cinema',
-    name: 'Soundbar Dolby Atmos (Sala de Som)',
-    type: 'soundbar',
-    location: 'Sala de Audição',
-    quality: 'Spatial Lossless',
-    connected: false,
-  },
-  {
-    id: 'airplay-bedroom',
-    name: 'Apple TV / AirPlay 2',
-    type: 'airplay',
-    location: 'Quarto Acústico',
-    quality: 'Lossless 48kHz',
-    connected: false,
-  },
-  {
-    id: 'bluetooth-monitor',
-    name: 'Monitores de Áudio Bluetooth HD',
-    type: 'bluetooth',
-    location: 'Mesa de Produção',
-    quality: 'LDAC 990 kbps',
-    connected: false,
-  },
-];
+function toAbsoluteUrl(url?: string): string {
+  if (!url) return `${window.location.origin}/logo.jpg`;
+  try {
+    return new URL(url, window.location.origin).href;
+  } catch {
+    return `${window.location.origin}/logo.jpg`;
+  }
+}
 
 export const CastModal: React.FC<CastModalProps> = ({
   isOpen,
   onClose,
   audioRef,
-  currentTrackTitle = 'Rádio AI Stream',
+  currentSong,
+  isPlaying,
+  onCastActiveChange,
+  externalError,
+  externalStatus,
+  onEnsureTrackLoaded,
 }) => {
-  const [devices, setDevices] = useState<CastDevice[]>(DEFAULT_DEVICES);
+  const [castAvailable, setCastAvailable] = useState<boolean>(false);
+  const [castState, setCastState] = useState<string>('NOT_CONNECTED');
+  const [connectedDeviceName, setConnectedDeviceName] = useState<string | null>(null);
+  const [remotePlaybackAvailable, setRemotePlaybackAvailable] = useState<boolean | null>(null);
+  const [audioOutputLabel, setAudioOutputLabel] = useState<string | null>(null);
+  const [audioOutputsCount, setAudioOutputsCount] = useState<number>(0);
   const [castVolume, setCastVolume] = useState<number>(85);
-  const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const castInitializedRef = useRef<boolean>(false);
+  const remotePlayerRef = useRef<any>(null);
+  const remoteControllerRef = useRef<any>(null);
+  const lastLoadedCastTrackIdRef = useRef<string | null>(null);
+
+  const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
+
+  const canSelectAudioOutput =
+    typeof navigator !== 'undefined' &&
+    Boolean((navigator.mediaDevices as any)?.selectAudioOutput);
+
+  const loadSongToCastSession = useCallback(
+    async (session: any, song: Song | null) => {
+      if (!session || !song?.audioUrl) return;
+      const chromeCast = (window as any).chrome?.cast;
+      if (!chromeCast?.media) return;
+
+      try {
+        const mediaInfo = new chromeCast.media.MediaInfo(
+          toAbsoluteUrl(song.audioUrl),
+          'audio/mpeg'
+        );
+        const metadata = new chromeCast.media.MusicTrackMediaMetadata();
+        metadata.title = song.title || "Beto's Radio";
+        metadata.artist = song.artist || "Beto's Radio";
+        metadata.albumName = song.album || 'Transmissão Hi-Fi';
+        metadata.images = [new chromeCast.Image(toAbsoluteUrl(song.coverUrl))];
+        mediaInfo.metadata = metadata;
+
+        const request = new chromeCast.media.LoadRequest(mediaInfo);
+        request.autoplay = true;
+        await session.loadMedia(request);
+        lastLoadedCastTrackIdRef.current = song.id;
+
+        // Pause local element so audio plays cleanly on the Cast device only
+        if (audioRef.current && !audioRef.current.paused) {
+          audioRef.current.pause();
+        }
+      } catch (err) {
+        console.warn('Erro ao enviar faixa para Chromecast:', err);
+      }
+    },
+    [audioRef]
+  );
+
+  // Initialize Google Cast Web Sender SDK when available
+  useEffect(() => {
+    const initCast = () => {
+      if (castInitializedRef.current) return;
+      const w = window as any;
+      const castFramework = w.cast?.framework;
+      const chromeCast = w.chrome?.cast;
+      if (!castFramework || !chromeCast) return;
+
+      try {
+        castInitializedRef.current = true;
+        const context = castFramework.CastContext.getInstance();
+        context.setOptions({
+          receiverApplicationId: chromeCast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+          autoJoinPolicy: chromeCast.AutoJoinPolicy.ORIGIN_SCOPED,
+        });
+
+        setCastAvailable(true);
+        setCastState(String(context.getCastState()));
+
+        const player = new castFramework.RemotePlayer();
+        const controller = new castFramework.RemotePlayerController(player);
+        remotePlayerRef.current = player;
+        remoteControllerRef.current = controller;
+
+        const syncFromContext = () => {
+          const state = String(context.getCastState());
+          setCastState(state);
+          const session = context.getCurrentSession();
+          if (session) {
+            const devName = session.getCastDevice?.()?.friendlyName || 'Dispositivo Chromecast';
+            setConnectedDeviceName(devName);
+            onCastActiveChange(true);
+            setErrorMessage(null);
+            setStatusMessage(`Conectado a ${devName}`);
+          } else {
+            setConnectedDeviceName(null);
+            lastLoadedCastTrackIdRef.current = null;
+            onCastActiveChange(false);
+          }
+        };
+
+        context.addEventListener(
+          castFramework.CastContextEventType.CAST_STATE_CHANGED,
+          syncFromContext
+        );
+        context.addEventListener(
+          castFramework.CastContextEventType.SESSION_STATE_CHANGED,
+          (evt: any) => {
+            syncFromContext();
+            const session = context.getCurrentSession();
+            if (
+              session &&
+              (evt.sessionState === castFramework.SessionState.SESSION_STARTED ||
+                evt.sessionState === castFramework.SessionState.SESSION_RESUMED)
+            ) {
+              void loadSongToCastSession(session, currentSong);
+            }
+          }
+        );
+
+        syncFromContext();
+      } catch (err) {
+        console.warn('Falha ao inicializar Google Cast SDK:', err);
+      }
+    };
+
+    initCast();
+    window.addEventListener('gcast-ready', initCast);
+    const poll = window.setInterval(() => {
+      if ((window as any).cast?.framework) {
+        initCast();
+        window.clearInterval(poll);
+      }
+    }, 600);
+
+    return () => {
+      window.removeEventListener('gcast-ready', initCast);
+      window.clearInterval(poll);
+    };
+  }, [currentSong, loadSongToCastSession, onCastActiveChange]);
+
+  // Keep connected Chromecast updated when changing songs
+  useEffect(() => {
+    const w = window as any;
+    const context = w.cast?.framework?.CastContext?.getInstance?.();
+    const session = context?.getCurrentSession?.();
+    if (session && currentSong?.id && lastLoadedCastTrackIdRef.current !== currentSong.id) {
+      void loadSongToCastSession(session, currentSong);
+    }
+  }, [currentSong?.id, loadSongToCastSession]);
+
+  // Sync external direct-cast error/status messages when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    if (externalError) setErrorMessage(externalError);
+    if (externalStatus) setStatusMessage(externalStatus);
+  }, [isOpen, externalError, externalStatus]);
+
+  // Listen to real W3C Remote Playback (Android Chrome) & Safari AirPlay connection events
+  useEffect(() => {
+    const audio = audioRef.current as any;
+    if (!audio) return;
+
+    const handleConnecting = () => {
+      setErrorMessage(null);
+      setStatusMessage('Conectando ao aparelho...');
+    };
+
+    const handleConnect = () => {
+      setConnectedDeviceName('Dispositivo Cast / TV');
+      onCastActiveChange(true);
+      setErrorMessage(null);
+      setStatusMessage('Conectado! Transmitindo áudio.');
+      if (audio.paused) {
+        audio.play().catch(() => {});
+      }
+    };
+
+    const handleDisconnect = () => {
+      setConnectedDeviceName(null);
+      onCastActiveChange(false);
+      setStatusMessage('Transmissão desconectada.');
+    };
+
+    const handleAirPlayChange = () => {
+      if (audio.webkitCurrentPlaybackTargetIsWireless) {
+        setConnectedDeviceName('Apple AirPlay');
+        onCastActiveChange(true);
+        setErrorMessage(null);
+        setStatusMessage('Transmitindo via AirPlay.');
+      } else {
+        setConnectedDeviceName(null);
+        onCastActiveChange(false);
+      }
+    };
+
+    const remote = audio.remote;
+    if (remote && typeof remote.addEventListener === 'function') {
+      remote.addEventListener('connecting', handleConnecting);
+      remote.addEventListener('connect', handleConnect);
+      remote.addEventListener('disconnect', handleDisconnect);
+    }
+    audio.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', handleAirPlayChange);
+
+    return () => {
+      if (remote && typeof remote.removeEventListener === 'function') {
+        remote.removeEventListener('connecting', handleConnecting);
+        remote.removeEventListener('connect', handleConnect);
+        remote.removeEventListener('disconnect', handleDisconnect);
+      }
+      audio.removeEventListener('webkitcurrentplaybacktargetiswirelesschanged', handleAirPlayChange);
+    };
+  }, [audioRef, onCastActiveChange]);
+
+  // Watch W3C Remote Playback availability & enumerate audio outputs when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelWatch: (() => void) | undefined;
+
+    const audio = audioRef.current as any;
+    if (audio?.remote && typeof audio.remote.watchAvailability === 'function') {
+      audio.remote
+        .watchAvailability((available: boolean) => {
+          setRemotePlaybackAvailable(available);
+        })
+        .then((callbackId: number) => {
+          cancelWatch = () => {
+            audio.remote.cancelWatchAvailability?.(callbackId).catch(() => {});
+          };
+        })
+        .catch(() => {
+          setRemotePlaybackAvailable(null);
+        });
+    }
+
+    if (navigator.mediaDevices?.enumerateDevices) {
+      navigator.mediaDevices
+        .enumerateDevices()
+        .then((devs) => {
+          const outputs = devs.filter((d) => d.kind === 'audiooutput');
+          setAudioOutputsCount(outputs.length);
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      cancelWatch?.();
+    };
+  }, [isOpen, audioRef]);
 
   if (!isOpen) return null;
 
-  const connectedDevice = devices.find((d) => d.connected);
+  const handleOpenRealCast = async () => {
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setIsSearching(true);
 
-  const handleTriggerNativeCast = async () => {
     try {
+      const w = window as any;
+      const context = w.cast?.framework?.CastContext?.getInstance?.();
       const audio = audioRef.current as any;
-      if (audio && audio.remote && typeof audio.remote.prompt === 'function') {
+      const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+
+      // 1. On Android Chrome: W3C Remote Playback API opens the native Android Cast chooser directly
+      if (isAndroid && audio?.remote && typeof audio.remote.prompt === 'function') {
+        onEnsureTrackLoaded?.();
         await audio.remote.prompt();
-      } else if ((window as any).chrome && (window as any).chrome.cast) {
-        // Trigger chrome cast request
-      } else {
-        // Native fallback notification
+        if (audio.remote.state === 'connected') {
+          setConnectedDeviceName('Dispositivo Cast / TV');
+          onCastActiveChange(true);
+          setStatusMessage('Transmitindo para o dispositivo selecionado.');
+        } else {
+          setStatusMessage('Seletor de transmissão do Android aberto.');
+        }
+        return;
       }
-    } catch (err) {
-      console.log('Native remote prompt:', err);
-    }
-  };
 
-  const toggleConnect = (deviceId: string) => {
-    setConnectingId(deviceId);
-    setTimeout(() => {
-      setDevices((prev) =>
-        prev.map((dev) => {
-          if (dev.id === deviceId) {
-            return { ...dev, connected: !dev.connected };
+      // 2. Desktop Chrome: Google Cast Web Sender SDK
+      if (context && typeof context.requestSession === 'function') {
+        await context.requestSession();
+        const session = context.getCurrentSession();
+        if (session) {
+          const devName = session.getCastDevice?.()?.friendlyName || 'Dispositivo Cast';
+          setConnectedDeviceName(devName);
+          onCastActiveChange(true);
+          if (currentSong) {
+            await loadSongToCastSession(session, currentSong);
           }
-          return { ...dev, connected: false };
-        })
-      );
-      setConnectingId(null);
-    }, 700);
-  };
+          setStatusMessage(`Transmitindo para ${devName}`);
+        }
+        return;
+      }
 
-  const getDeviceIcon = (type: CastDevice['type']) => {
-    switch (type) {
-      case 'chromecast':
-      case 'smart_tv':
-        return <Tv className="w-5 h-5 text-cyan-400" />;
-      case 'nest_speaker':
-      case 'soundbar':
-        return <Speaker className="w-5 h-5 text-purple-400" />;
-      case 'airplay':
-        return <Radio className="w-5 h-5 text-pink-400" />;
-      default:
-        return <Wifi className="w-5 h-5 text-amber-400" />;
+      // 3. Fallback: W3C Remote Playback API (Android / Edge / Chrome)
+      if (audio?.remote && typeof audio.remote.prompt === 'function') {
+        onEnsureTrackLoaded?.();
+        await audio.remote.prompt();
+        if (audio.remote.state === 'connected') {
+          setConnectedDeviceName('Dispositivo Cast / TV');
+          onCastActiveChange(true);
+        }
+        setStatusMessage('Seletor de transmissão remoto aberto.');
+        return;
+      }
+
+      // 4. Fallback: Safari / iOS AirPlay Picker
+      if (audio && typeof audio.webkitShowPlaybackTargetPicker === 'function') {
+        onEnsureTrackLoaded?.();
+        audio.webkitShowPlaybackTargetPicker();
+        setStatusMessage('Seletor AirPlay aberto.');
+        return;
+      }
+
+      setErrorMessage(
+        isInIframe
+          ? 'O navegador bloqueia a descoberta de Chromecast dentro do iframe de preview. Abra a rádio diretamente em https://betosradio.com no Chrome ou use "Transmitir" no menu do navegador.'
+          : 'Este navegador não suporta Google Cast nativo. No Chrome (Android/PC), use o menu ⋮ → Transmitir (Cast). No iPhone/Mac, use o Safari (AirPlay).'
+      );
+    } catch (err: any) {
+      const code = err?.code || err?.name || '';
+      const msg = String(err?.message || err || '');
+      if (code === 'cancel' || code === 'AbortError' || /cancel|abort/i.test(msg)) {
+        setStatusMessage('Seleção de aparelho cancelada.');
+      } else if (/no_devices_found|NotFoundError/i.test(`${code} ${msg}`)) {
+        setErrorMessage(
+          'Nenhum Chromecast/TV encontrado na mesma rede Wi-Fi. Verifique se o celular/PC e a TV estão no mesmo Wi-Fi.'
+        );
+      } else if (/InvalidStateError|NotSupportedError/i.test(`${code} ${msg}`)) {
+        setErrorMessage(
+          'Selecione ou dê Play em uma música antes de transmitir, ou use o menu ⋮ → Transmitir do Chrome.'
+        );
+      } else if (/NotAllowedError|SecurityError/i.test(`${code} ${msg}`) || isInIframe) {
+        setErrorMessage(
+          'O navegador bloqueou o Cast nesta janela (iframe/permissão). Acesse diretamente em https://betosradio.com no Google Chrome para detectar seus aparelhos na rede.'
+        );
+      } else {
+        setErrorMessage(
+          `Não foi possível abrir o seletor Cast (${msg || 'recurso indisponível neste navegador'}). Tente pelo menu do Chrome (⋮ → Transmitir) ou AirPlay no Safari.`
+        );
+      }
+    } finally {
+      setIsSearching(false);
     }
   };
+
+  const handleSelectAudioOutput = async () => {
+    setErrorMessage(null);
+    setStatusMessage(null);
+    const audio = audioRef.current as any;
+
+    if (!canSelectAudioOutput || typeof audio?.setSinkId !== 'function') {
+      setErrorMessage(
+        'A seleção direta de caixa Bluetooth/USB pelo site é suportada apenas no Chrome/Edge Desktop. No celular, conecte seu aparelho Bluetooth normalmente nas configurações do aparelho.'
+      );
+      return;
+    }
+
+    try {
+      const device = await (navigator.mediaDevices as any).selectAudioOutput();
+      if (device?.deviceId) {
+        await audio.setSinkId(device.deviceId);
+        const label = device.label || 'Caixa de som / Bluetooth selecionada';
+        setAudioOutputLabel(label);
+        onCastActiveChange(true);
+        setStatusMessage(`Áudio direcionado para: ${label}`);
+      }
+    } catch (err: any) {
+      if (err?.name !== 'AbortError' && err?.name !== 'NotAllowedError') {
+        setErrorMessage(err?.message || 'Não foi possível selecionar a saída de áudio.');
+      }
+    }
+  };
+
+  const handleDisconnectCast = () => {
+    try {
+      const w = window as any;
+      const context = w.cast?.framework?.CastContext?.getInstance?.();
+      const session = context?.getCurrentSession?.();
+      if (session) {
+        session.endSession(true);
+      }
+    } catch {
+      // ignore
+    }
+    setConnectedDeviceName(null);
+    setAudioOutputLabel(null);
+    lastLoadedCastTrackIdRef.current = null;
+    onCastActiveChange(false);
+    setStatusMessage('Transmissão desconectada.');
+  };
+
+  const handleCastVolumeChange = (val: number) => {
+    setCastVolume(val);
+    try {
+      const player = remotePlayerRef.current;
+      const controller = remoteControllerRef.current;
+      if (player && controller && player.canControlVolume) {
+        player.volumeLevel = val / 100;
+        controller.setVolumeLevel();
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const hasDevicesDetected =
+    castState === 'NOT_CONNECTED' ||
+    castState === 'CONNECTING' ||
+    castState === 'CONNECTED' ||
+    remotePlaybackAvailable === true;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
@@ -123,110 +466,143 @@ export const CastModal: React.FC<CastModalProps> = ({
         </button>
 
         {/* Modal Header */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-5">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-purple-500/25">
             <Cast className="w-5 h-5 text-white" />
           </div>
           <div>
             <h2 className="text-lg font-bold font-heading tracking-wide">
-              Transmitir Áudio • Cast Rádio AI
+              Transmitir Áudio • Cast Real
             </h2>
             <p className="text-xs text-white/60 font-mono-code">
-              Transmita para Chromecast, Nest Audio, Apple TV ou Soundbars
+              Detecta Chromecast, Google TV, Nest Audio, AirPlay e Bluetooth reais
             </p>
           </div>
         </div>
 
-        {/* Currently connected status bar */}
-        {connectedDevice ? (
-          <div className="mb-6 p-4 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="relative flex items-center justify-center">
+        {/* Iframe warning if running inside AI Studio preview */}
+        {isInIframe && (
+          <div className="mb-4 p-3 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-200 text-xs font-mono-code flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+            <span>
+              Em janelas de preview (iframe), navegadores restringem o scanner de rede local do Cast. Para descobrir sua TV/Chromecast, acesse diretamente{' '}
+              <strong className="text-white">betosradio.com</strong> no Chrome ou Safari.
+            </span>
+          </div>
+        )}
+
+        {/* Active connection banner */}
+        {(connectedDeviceName || audioOutputLabel) && (
+          <div className="mb-5 p-4 rounded-xl bg-emerald-500/15 border border-emerald-500/35 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="relative flex items-center justify-center flex-shrink-0">
                 <span className="w-3 h-3 bg-emerald-400 rounded-full animate-ping absolute" />
                 <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full relative" />
               </div>
-              <div>
-                <p className="text-xs font-mono-code text-emerald-300 font-semibold uppercase">
-                  Transmitindo Atualmente
+              <div className="min-w-0">
+                <p className="text-[10px] font-mono-code text-emerald-300 font-bold uppercase">
+                  Transmitindo Agora
                 </p>
-                <p className="text-sm font-bold text-white">{connectedDevice.name}</p>
-                <p className="text-[11px] text-white/50">{connectedDevice.quality} • Latência 14ms</p>
+                <p className="text-sm font-bold text-white truncate">
+                  {connectedDeviceName || audioOutputLabel}
+                </p>
               </div>
             </div>
             <button
-              onClick={() => toggleConnect(connectedDevice.id)}
-              className="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-mono-code transition-colors border border-red-500/30"
+              onClick={handleDisconnectCast}
+              className="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-mono-code transition-colors border border-red-500/30 flex-shrink-0"
             >
               Desconectar
             </button>
           </div>
-        ) : (
-          <div className="mb-5 p-3 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between text-xs text-white/70">
-            <span className="flex items-center gap-2 font-mono-code">
-              <Wifi className="w-3.5 h-3.5 text-cyan-400" /> Rede Local: 5GHz • Pronta para transmissão
+        )}
+
+        {/* Real network & SDK status */}
+        <div className="mb-4 p-3.5 rounded-xl bg-white/5 border border-white/10 space-y-1.5 text-xs font-mono-code">
+          <div className="flex items-center justify-between text-white/80">
+            <span className="flex items-center gap-2">
+              <Wifi className="w-3.5 h-3.5 text-cyan-400" />
+              Google Cast SDK:
             </span>
-            <button
-              onClick={handleTriggerNativeCast}
-              className="text-xs text-cyan-300 hover:text-cyan-200 underline font-mono-code"
-            >
-              Abrir Cast Nativo
-            </button>
+            <span className={castAvailable ? 'text-emerald-300 font-semibold' : 'text-white/50'}>
+              {castAvailable
+                ? hasDevicesDetected
+                  ? 'Pronto (aparelhos disponíveis)'
+                  : 'Ativo (buscando na rede Wi-Fi)'
+                : 'Usando API nativa / AirPlay'}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-white/60 text-[11px]">
+            <span>Saídas de áudio detectadas no dispositivo:</span>
+            <span>{audioOutputsCount > 0 ? `${audioOutputsCount} saída(s)` : 'Padrão do sistema'}</span>
+          </div>
+        </div>
+
+        {/* Status / Error feedback */}
+        {statusMessage && (
+          <div className="mb-4 p-3 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-200 text-xs font-mono-code">
+            {statusMessage}
           </div>
         )}
 
-        {/* Device List */}
-        <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1 mb-5">
-          {devices.map((device) => {
-            const isConnecting = connectingId === device.id;
-            return (
-              <div
-                key={device.id}
-                onClick={() => !isConnecting && toggleConnect(device.id)}
-                className={`flex items-center justify-between p-3.5 rounded-xl cursor-pointer transition-all border ${
-                  device.connected
-                    ? 'bg-purple-950/40 border-purple-500/50 shadow-md shadow-purple-900/20'
-                    : 'bg-white/5 hover:bg-white/10 border-white/5'
-                }`}
-              >
-                <div className="flex items-center gap-3.5">
-                  <div className="p-2 rounded-lg bg-white/5 border border-white/10">
-                    {getDeviceIcon(device.type)}
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-semibold text-white/95 flex items-center gap-2">
-                      {device.name}
-                      {device.connected && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-mono-code font-bold">
-                          ATIVO
-                        </span>
-                      )}
-                    </h4>
-                    <p className="text-xs text-white/50 font-mono-code">
-                      {device.location} • <span className="text-white/40">{device.quality}</span>
-                    </p>
-                  </div>
-                </div>
+        {errorMessage && (
+          <div className="mb-4 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-200 text-xs font-mono-code">
+            {errorMessage}
+          </div>
+        )}
 
-                <div className="flex items-center">
-                  {isConnecting ? (
-                    <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-                  ) : device.connected ? (
-                    <div className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-                      <Check className="w-4 h-4" />
-                    </div>
-                  ) : (
-                    <span className="text-xs font-mono-code text-white/40 hover:text-white/80 px-2 py-1 rounded bg-white/5">
-                      Conectar
-                    </span>
-                  )}
-                </div>
+        {/* Real Action Buttons */}
+        <div className="space-y-3 mb-5">
+          <button
+            onClick={handleOpenRealCast}
+            disabled={isSearching}
+            className="w-full p-4 rounded-xl bg-gradient-to-r from-cyan-500/25 via-purple-500/25 to-pink-500/25 hover:from-cyan-500/35 hover:to-purple-500/35 border border-cyan-400/40 flex items-center justify-between transition-all text-left disabled:opacity-60"
+          >
+            <div className="flex items-center gap-3.5">
+              <div className="p-2.5 rounded-xl bg-cyan-500/20 border border-cyan-400/30">
+                {isSearching ? (
+                  <RefreshCw className="w-5 h-5 text-cyan-300 animate-spin" />
+                ) : (
+                  <Tv className="w-5 h-5 text-cyan-300" />
+                )}
               </div>
-            );
-          })}
+              <div>
+                <h4 className="text-sm font-bold text-white">
+                  Procurar Aparelhos Cast / TV / AirPlay
+                </h4>
+                <p className="text-xs text-white/60 font-mono-code">
+                  Abre a lista real de Chromecast, Google TV, Nest e Apple AirPlay na sua rede
+                </p>
+              </div>
+            </div>
+            <Cast className="w-4 h-4 text-cyan-300 flex-shrink-0" />
+          </button>
+
+          <button
+            onClick={handleSelectAudioOutput}
+            className="w-full p-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-between transition-all text-left"
+          >
+            <div className="flex items-center gap-3.5">
+              <div className="p-2.5 rounded-xl bg-purple-500/15 border border-purple-400/25">
+                <Bluetooth className="w-5 h-5 text-purple-300" />
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-white">
+                  Selecionar Caixa Bluetooth / Saída de Som
+                </h4>
+                <p className="text-xs text-white/50 font-mono-code">
+                  {canSelectAudioOutput
+                    ? 'Escolher dispositivo de áudio conectado ao computador'
+                    : 'No celular, conecte o Bluetooth pelo sistema; no PC use Chrome/Edge'}
+                </p>
+              </div>
+            </div>
+            <Speaker className="w-4 h-4 text-purple-300 flex-shrink-0" />
+          </button>
         </div>
 
-        {/* Remote Volume slider if connected */}
-        {connectedDevice && (
+        {/* Remote Volume slider if Cast session is connected */}
+        {connectedDeviceName && (
           <div className="pt-4 border-t border-white/10 flex items-center gap-3">
             <Volume2 className="w-4 h-4 text-purple-400" />
             <span className="text-xs font-mono-code text-white/60">Volume Cast:</span>
@@ -235,7 +611,7 @@ export const CastModal: React.FC<CastModalProps> = ({
               min="0"
               max="100"
               value={castVolume}
-              onChange={(e) => setCastVolume(Number(e.target.value))}
+              onChange={(e) => handleCastVolumeChange(Number(e.target.value))}
               className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-purple-400"
             />
             <span className="text-xs font-mono-code text-white/80 w-8 text-right">
@@ -245,11 +621,13 @@ export const CastModal: React.FC<CastModalProps> = ({
         )}
 
         {/* Footer info */}
-        <div className="mt-5 pt-3 border-t border-white/5 flex items-center justify-between text-[11px] font-mono-code text-white/40">
+        <div className="mt-4 pt-3 border-t border-white/5 flex items-center justify-between text-[11px] font-mono-code text-white/40">
           <span className="flex items-center gap-1">
-            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" /> Streaming em ponto de conexão seguro
+            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" /> Descoberta real via Cast / AirPlay
           </span>
-          <span>Faixa: {currentTrackTitle.substring(0, 22)}...</span>
+          <span className="truncate max-w-[180px]">
+            {currentSong?.title ? `${isPlaying ? '▶ ' : ''}${currentSong.title}` : 'Nenhuma faixa selecionada'}
+          </span>
         </div>
       </div>
     </div>

@@ -425,6 +425,13 @@ apiApp.post('/api/songs', async (req: Request, res: Response): Promise<void> => 
 
 // 5. Update song
 apiApp.put('/api/songs/:id', async (req: Request, res: Response): Promise<void> => {
+  if (!isValidAdminRequest(req)) {
+    res.status(401).json({
+      error: 'Sessão de criador expirada ou inválida. Faça login novamente na Área do Criador.',
+    });
+    return;
+  }
+
   const { id } = req.params;
   try {
     let existing: StoredSong | null = null;
@@ -455,17 +462,27 @@ apiApp.put('/api/songs/:id', async (req: Request, res: Response): Promise<void> 
       id,
     };
 
+    let savedToSupabase = false;
     if (isSupabaseWriteConfigured()) {
-      try {
-        await upsertSongToSupabase(updatedSong);
-      } catch (supabaseErr: any) {
-        console.warn('Supabase update fallback:', supabaseErr?.message);
-      }
+      await upsertSongToSupabase(updatedSong);
+      savedToSupabase = true;
+    } else if (isSupabaseConfigured() && !isBlobConfigured()) {
+      res.status(403).json({
+        error: `Edição bloqueada: Supabase em modo somente leitura (chave atual: ${getSupabaseKeyRole()}). Defina SUPABASE_SECRET_KEY ou SUPABASE_SERVICE_ROLE_KEY nos Secrets.`,
+      });
+      return;
     }
 
     if (isBlobConfigured()) {
       await saveSongMetadataToBlob(updatedSong);
-    } else {
+    } else if (!savedToSupabase) {
+      if (process.env.VERCEL || process.env.NETLIFY) {
+        res.status(503).json({
+          error:
+            'Nenhum banco de escrita configurado no servidor. Defina SUPABASE_URL e SUPABASE_SECRET_KEY nas variáveis de ambiente.',
+        });
+        return;
+      }
       const songs = loadLocalSongs();
       const index = songs.findIndex((s) => s.id === id);
       if (index !== -1) {
@@ -474,10 +491,10 @@ apiApp.put('/api/songs/:id', async (req: Request, res: Response): Promise<void> 
       }
     }
 
-    res.json({ success: true, song: updatedSong });
+    res.json({ success: true, song: updatedSong, savedToSupabase });
   } catch (err: any) {
     console.error('Error updating song:', err);
-    res.status(500).json({ error: 'Erro ao atualizar música.', details: err?.message });
+    res.status(500).json({ error: err?.message || 'Erro ao atualizar música.' });
   }
 });
 
@@ -920,6 +937,62 @@ apiApp.post(
     }
 
     res.status(201).json({ success: true, song: newSong, savedToSupabase });
+  }
+);
+
+// 8.1. Upload single asset (audio/cover/bandPhoto) when editing a song
+apiApp.post(
+  '/api/upload-asset',
+  uploadMemory.single('file'),
+  async (req: Request, res: Response): Promise<void> => {
+    if (!isValidAdminRequest(req)) {
+      res.status(401).json({
+        error: 'Sessão de criador expirada ou inválida. Faça login novamente na Área do Criador.',
+      });
+      return;
+    }
+
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ error: 'Nenhum arquivo enviado.' });
+      return;
+    }
+
+    const folder = req.body?.folder === 'tracks' ? 'tracks' : 'covers';
+    const fallbackExt = folder === 'tracks' ? '.mp3' : '.jpg';
+    const ext = path.extname(file.originalname) || fallbackExt;
+    const safeName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}${ext}`;
+
+    try {
+      if (isBlobConfigured()) {
+        const uploaded = await uploadBufferToBlob(
+          `${folder}/${safeName}`,
+          file.buffer,
+          file.mimetype || (folder === 'tracks' ? 'audio/mpeg' : 'image/jpeg')
+        );
+        res.json({ url: uploaded.url });
+        return;
+      }
+
+      if (isSupabaseWriteConfigured()) {
+        const publicUrl = await uploadMediaToSupabaseStorage(
+          `${folder}/${safeName}`,
+          file.buffer,
+          file.mimetype || (folder === 'tracks' ? 'audio/mpeg' : 'image/jpeg')
+        );
+        res.json({ url: publicUrl });
+        return;
+      }
+
+      ensureLocalDirs();
+      const targetDir = folder === 'tracks' ? TRACKS_DIR : COVERS_DIR;
+      const urlPrefix = folder === 'tracks' ? '/uploads/tracks' : '/uploads/covers';
+      fs.writeFileSync(path.resolve(targetDir, safeName), file.buffer);
+      res.json({ url: `${urlPrefix}/${safeName}` });
+    } catch (err: any) {
+      console.error('Error uploading asset:', err);
+      res.status(500).json({ error: err?.message || 'Erro ao enviar arquivo.' });
+    }
   }
 );
 

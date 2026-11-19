@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {
   Play,
   Pause,
@@ -9,14 +9,10 @@ import {
   Shuffle,
   Repeat,
   Cast,
-  Sparkles,
   Users,
-  Copy,
   Check,
   Radio,
-  FileText,
   Disc3,
-  ExternalLink,
   Heart,
   Share2,
 } from 'lucide-react';
@@ -84,7 +80,6 @@ export const TopPlayer: React.FC<TopPlayerProps> = ({
   audioRef,
 }) => {
   const { isAdmin } = useAdmin();
-  const [copiedStyle, setCopiedStyle] = useState(false);
 
   const formatTime = (timeInSeconds: number) => {
     if (isNaN(timeInSeconds) || timeInSeconds < 0) return '0:00';
@@ -94,14 +89,6 @@ export const TopPlayer: React.FC<TopPlayerProps> = ({
   };
 
   const progressPercentage = duration > 0 ? (currentTime / duration) * 100 : 0;
-
-  const handleCopyStyle = () => {
-    if (currentSong?.stylePrompt) {
-      navigator.clipboard.writeText(currentSong.stylePrompt);
-      setCopiedStyle(true);
-      setTimeout(() => setCopiedStyle(false), 2000);
-    }
-  };
 
   return (
     <div className="relative w-full rounded-3xl glass-panel-elevated p-6 md:p-8 border border-white/15 shadow-2xl overflow-hidden">
@@ -312,17 +299,6 @@ export const TopPlayer: React.FC<TopPlayerProps> = ({
                 </button>
               )}
 
-              {currentSong?.stylePrompt && (
-                <button
-                  onClick={handleCopyStyle}
-                  title="Copiar prompt de estilo do Suno"
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-xs font-mono-code border border-cyan-500/25 transition-all"
-                >
-                  {copiedStyle ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span className="hidden sm:inline">Copiar Estilo Suno</span>
-                </button>
-              )}
-
               {isAdmin && (
                 <button
                   onClick={onOpenBandModal}
@@ -392,7 +368,7 @@ export const TopPlayer: React.FC<TopPlayerProps> = ({
               {/* Cast Button */}
               <button
                 onClick={onOpenCast}
-                title="Transmitir áudio para Chromecast ou caixas de som"
+                title="Transmitir diretamente para TV, Chromecast ou caixas de som"
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono-code font-bold transition-all border ${
                   isCastActive
                     ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50 shadow-md shadow-cyan-500/20 animate-pulse'
