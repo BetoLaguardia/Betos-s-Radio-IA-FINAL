@@ -13,7 +13,7 @@ import {
   saveSongMetadataToBlob,
   uploadBufferToBlob,
   type StoredSong,
-} from './blobStorage.ts';
+} from './blobStorage.js';
 import {
   deleteSongFromSupabase,
   exportSongsToSupabase,
@@ -28,7 +28,7 @@ import {
   updateSongLikesInSupabase,
   uploadMediaToSupabaseStorage,
   upsertSongToSupabase,
-} from './supabaseStorage.ts';
+} from './supabaseStorage.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const UPLOADS_DIR = path.resolve(process.cwd(), 'public', 'uploads');
