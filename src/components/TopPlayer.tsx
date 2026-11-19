@@ -200,11 +200,19 @@ export const TopPlayer: React.FC<TopPlayerProps> = ({
             </div>
 
             <h1 className="text-2xl md:text-3xl lg:text-4xl font-extrabold font-heading text-white tracking-tight truncate">
-              {currentSong?.title || 'Selecione uma faixa da Rádio'}
+              {currentSong?.title || 'Selecione uma música para tocar'}
             </h1>
             <p className="text-sm md:text-base text-white/70 font-mono-code mt-0.5 truncate">
-              {currentSong?.artist || 'Estúdio Rádio AI'} •{' '}
-              <span className="text-white/40">{currentSong?.album || 'Catálogo Digital'}</span>
+              {currentSong ? (
+                <>
+                  {currentSong.artist || 'Estúdio Rádio AI'} •{' '}
+                  <span className="text-white/40">{currentSong.album || 'Catálogo Digital'}</span>
+                </>
+              ) : (
+                <span className="text-white/50">
+                  Escolha uma música na programação ao lado para iniciar a reprodução
+                </span>
+              )}
             </p>
           </div>
 

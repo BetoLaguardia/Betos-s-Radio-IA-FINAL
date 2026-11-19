@@ -14,7 +14,7 @@ import { loadCachedDurations, probeAudioDuration, saveCachedDuration } from './u
 export default function App() {
   const { isAdmin, getAuthHeaders } = useAdmin();
   const [songs, setSongs] = useState<Song[]>([]);
-  const [currentSongIndex, setCurrentSongIndex] = useState<number>(0);
+  const [currentSongIndex, setCurrentSongIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
@@ -50,7 +50,7 @@ export default function App() {
     loadCachedDurations()
   );
 
-  const currentSong = songs[currentSongIndex] || null;
+  const currentSong = currentSongIndex !== null ? songs[currentSongIndex] || null : null;
   currentSongIdRef.current = currentSong?.id ?? null;
 
   // Fetch songs from server (Supabase / Vercel Blob / local JSON)
@@ -85,8 +85,8 @@ export default function App() {
           const preservedIdx = nextSongs.findIndex((s) => s.id === currentSongIdRef.current);
           if (preservedIdx !== -1) {
             setCurrentSongIndex(preservedIdx);
-          } else if (nextSongs.length > 0) {
-            setCurrentSongIndex(0);
+          } else {
+            setCurrentSongIndex(null);
           }
         }
       }
@@ -121,7 +121,8 @@ export default function App() {
   }, []);
 
   const effectiveLyrics = useMemo(() => {
-    const raw = currentSong?.lyrics;
+    if (!currentSong) return '';
+    const raw = currentSong.lyrics;
     const isPlaceholder = !raw || 
       raw.includes('[Áudio Carregado Localmente]') || 
       raw.includes('[Instrumental / Suno AI Track]') ||
@@ -129,7 +130,7 @@ export default function App() {
       raw.trim().length < 20;
 
     if (isPlaceholder) {
-      return generateAutomaticLyrics(currentSong?.title || '', currentSong?.artist || '', currentSong?.stylePrompt || '');
+      return generateAutomaticLyrics(currentSong.title || '', currentSong.artist || '', currentSong.stylePrompt || '');
     }
     return raw;
   }, [currentSong]);
@@ -180,6 +181,22 @@ export default function App() {
     };
   }, [songs, resolvedDurations]);
 
+  // Smooth frame-accurate time tracking while playing for teleprompter & countdown
+  useEffect(() => {
+    if (!isPlaying) return;
+    let rafId = 0;
+
+    const tick = () => {
+      if (audioRef.current) {
+        setCurrentTime(audioRef.current.currentTime);
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [isPlaying, currentSong?.id]);
+
   // Handle Audio source and events
   useEffect(() => {
     const audio = audioRef.current;
@@ -193,6 +210,13 @@ export default function App() {
       if (isPlaying) {
         audio.play().catch((err) => console.log('Audio autoplay prevented:', err));
       }
+    } else {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      setCurrentTime(0);
+      setDuration(0);
+      setIsPlaying(false);
     }
   }, [currentSong?.id]);
 
@@ -252,6 +276,14 @@ export default function App() {
     const audio = audioRef.current;
     if (!audio) return;
 
+    if (!currentSong) {
+      if (songs.length > 0) {
+        setCurrentSongIndex(0);
+        setIsPlaying(true);
+      }
+      return;
+    }
+
     if (isPlaying) {
       audio.pause();
       setIsPlaying(false);
@@ -265,23 +297,34 @@ export default function App() {
 
   const handleNext = () => {
     if (songs.length === 0) return;
+    if (currentSongIndex === null) {
+      const startIdx = isShuffle ? Math.floor(Math.random() * songs.length) : 0;
+      setCurrentSongIndex(startIdx);
+      setIsPlaying(true);
+      return;
+    }
     if (isShuffle) {
       const randomIdx = Math.floor(Math.random() * songs.length);
       setCurrentSongIndex(randomIdx);
     } else {
-      setCurrentSongIndex((prev) => (prev + 1) % songs.length);
+      setCurrentSongIndex((prev) => ((prev ?? -1) + 1) % songs.length);
     }
     setIsPlaying(true);
   };
 
   const handlePrev = () => {
     if (songs.length === 0) return;
+    if (currentSongIndex === null) {
+      setCurrentSongIndex(0);
+      setIsPlaying(true);
+      return;
+    }
     if (currentTime > 3) {
       if (audioRef.current) audioRef.current.currentTime = 0;
       setCurrentTime(0);
       return;
     }
-    setCurrentSongIndex((prev) => (prev - 1 + songs.length) % songs.length);
+    setCurrentSongIndex((prev) => (((prev ?? 0) - 1 + songs.length) % songs.length));
     setIsPlaying(true);
   };
 
@@ -297,6 +340,7 @@ export default function App() {
   };
 
   const handleSeek = (time: number) => {
+    if (!currentSong) return;
     if (audioRef.current) {
       audioRef.current.currentTime = time;
       setCurrentTime(time);
@@ -324,7 +368,8 @@ export default function App() {
       const updated = songs.filter((s) => s.id !== id);
       setSongs(updated);
       if (currentSong?.id === id) {
-        setCurrentSongIndex(0);
+        setCurrentSongIndex(null);
+        setIsPlaying(false);
       }
     } catch (err) {
       console.error('Failed to delete song:', err);
@@ -490,6 +535,8 @@ export default function App() {
               onSeek={handleSeek}
               title={currentSong?.title}
               artist={currentSong?.artist}
+              hasSong={Boolean(currentSong)}
+              songId={currentSong?.id}
             />
           </div>
 
@@ -551,7 +598,8 @@ export default function App() {
         }}
         onCatalogReplaced={(updatedSongs) => {
           setSongs(updatedSongs);
-          setCurrentSongIndex(0);
+          setCurrentSongIndex(null);
+          setIsPlaying(false);
         }}
         onRefreshSongs={() => fetchSongs(true)}
         onDeleteSong={handleDeleteSong}
