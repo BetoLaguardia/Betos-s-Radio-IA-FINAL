@@ -1,4 +1,5 @@
 {
+  "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=server.js && esbuild api/index.ts --bundle --platform=node --format=esm --packages=external --outfile=api/index.js"
   "name": "react-example",
   "private": true,
   "version": "0.0.0",
