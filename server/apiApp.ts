@@ -594,6 +594,140 @@ apiApp.delete('/api/songs/:id', async (req: Request, res: Response): Promise<voi
   }
 });
 
+function escapeHtmlAttr(str: string): string {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+async function resolveSongByIdForShare(id: string): Promise<StoredSong | null> {
+  if (!id) return null;
+  if (isSupabaseConfigured()) {
+    try {
+      const found = await findSongInSupabase(id);
+      if (found) return found;
+    } catch {
+      // fallback
+    }
+  }
+  if (isBlobConfigured()) {
+    try {
+      const found = await findSongInBlob(id);
+      if (found) return found;
+    } catch {
+      // fallback
+    }
+  }
+  const localSongs = loadLocalSongs();
+  return localSongs.find((s) => s.id === id) || null;
+}
+
+function getRequestOrigin(req: Request): string {
+  const protoHeader = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
+  const proto = protoHeader.split(',')[0].trim();
+  const hostHeader = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'betosradio.com';
+  const host = hostHeader.split(',')[0].trim();
+  return `${proto}://${host}`;
+}
+
+// 6.1. Dynamic OpenGraph Share Page (shows song cover art & metadata in WhatsApp/Telegram/iMessage previews)
+apiApp.get('/api/share', async (req: Request, res: Response): Promise<void> => {
+  const trackId = typeof req.query.track === 'string' ? req.query.track.trim() : '';
+  const origin = getRequestOrigin(req);
+  const song = await resolveSongByIdForShare(trackId);
+
+  const title = "Beto's Radio - Rádio com poder IA";
+  const description =
+    "Beto's Radio - Transmissão musical exclusiva com IA. Desfrute o poder da rádio IA!";
+
+  let coverUrl = song?.coverUrl || `${origin}/logo.jpg`;
+  if (coverUrl.startsWith('/')) {
+    coverUrl = `${origin}${coverUrl}`;
+  }
+
+  const targetUrl = trackId ? `${origin}/?track=${encodeURIComponent(trackId)}` : `${origin}/`;
+  const canonicalShareUrl = trackId ? `${origin}/api/share?track=${encodeURIComponent(trackId)}` : `${origin}/api/share`;
+
+  const html = `<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escapeHtmlAttr(title)}</title>
+    <meta name="description" content="${escapeHtmlAttr(description)}" />
+    <meta property="og:site_name" content="Beto's Radio" />
+    <meta property="og:type" content="music.song" />
+    <meta property="og:title" content="${escapeHtmlAttr(title)}" />
+    <meta property="og:description" content="${escapeHtmlAttr(description)}" />
+    <meta property="og:url" content="${escapeHtmlAttr(canonicalShareUrl)}" />
+    <meta property="og:image" content="${escapeHtmlAttr(coverUrl)}" />
+    <meta property="og:image:secure_url" content="${escapeHtmlAttr(coverUrl)}" />
+    <meta property="og:image:width" content="800" />
+    <meta property="og:image:height" content="800" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${escapeHtmlAttr(title)}" />
+    <meta name="twitter:description" content="${escapeHtmlAttr(description)}" />
+    <meta name="twitter:image" content="${escapeHtmlAttr(coverUrl)}" />
+    <meta http-equiv="refresh" content="0;url=${escapeHtmlAttr(targetUrl)}" />
+    <script>window.location.replace(${JSON.stringify(targetUrl)});</script>
+  </head>
+  <body style="margin:0;background:#08090d;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:24px;">
+    <div style="max-width:380px;">
+      <img src="${escapeHtmlAttr(coverUrl)}" alt="${escapeHtmlAttr(title)}" style="width:220px;height:220px;object-fit:cover;border-radius:20px;box-shadow:0 20px 50px rgba(0,0,0,.6);margin-bottom:16px;" />
+      <h1 style="font-size:18px;margin:0 0 8px;">${escapeHtmlAttr(song?.title || "Beto's Radio")}</h1>
+      <p style="font-size:14px;opacity:.7;margin:0 0 18px;">${escapeHtmlAttr(song?.artist || 'Estúdio Hi-Fi')}</p>
+      <a href="${escapeHtmlAttr(targetUrl)}" style="display:inline-block;padding:12px 24px;border-radius:12px;background:#9333ea;color:#fff;text-decoration:none;font-weight:bold;">Ouvir na Rádio</a>
+    </div>
+  </body>
+</html>`;
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=120');
+  res.status(200).send(html);
+});
+
+// 6.2. Same-origin cover proxy for Web Share API image attachment (avoids CORS issues on external covers)
+apiApp.get('/api/share-cover', async (req: Request, res: Response): Promise<void> => {
+  const trackId = typeof req.query.track === 'string' ? req.query.track.trim() : '';
+  const origin = getRequestOrigin(req);
+  const song = await resolveSongByIdForShare(trackId);
+
+  let coverUrl = song?.coverUrl || `${origin}/logo.jpg`;
+  if (coverUrl.startsWith('/')) {
+    coverUrl = `${origin}${coverUrl}`;
+  }
+
+  try {
+    const imgRes = await fetch(coverUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 BetosRadioShareBot/1.0',
+      },
+    });
+    if (imgRes.ok) {
+      const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+      const arrayBuf = await imgRes.arrayBuffer();
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.status(200).send(Buffer.from(arrayBuf));
+      return;
+    }
+  } catch {
+    // fallback to local logo
+  }
+
+  const localLogoPath = path.resolve(process.cwd(), 'public', 'logo.jpg');
+  if (fs.existsSync(localLogoPath)) {
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.status(200).send(fs.readFileSync(localLogoPath));
+    return;
+  }
+
+  res.status(404).end();
+});
+
 // 7. Download and Import from Suno Link (uploads to Vercel Blob when configured)
 apiApp.post('/api/suno/download', async (req: Request, res: Response): Promise<void> => {
   const { url, customTitle, customLyrics, customStyle, mood, rhythm } = req.body || {};

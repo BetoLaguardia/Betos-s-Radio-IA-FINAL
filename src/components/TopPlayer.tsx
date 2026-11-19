@@ -278,7 +278,7 @@ export const TopPlayer: React.FC<TopPlayerProps> = ({
               {currentSong && onShare && (
                 <button
                   onClick={onShare}
-                  title="Compartilhar música"
+                  title="Compartilhar música com capa do álbum"
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono-code font-semibold border transition-all active:scale-95 ${
                     isShared
                       ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
@@ -292,6 +292,14 @@ export const TopPlayer: React.FC<TopPlayerProps> = ({
                     </>
                   ) : (
                     <>
+                      <img
+                        src={currentSong.coverUrl || '/logo.jpg'}
+                        alt={currentSong.title}
+                        className="w-4 h-4 rounded object-cover border border-white/25 flex-shrink-0"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = '/logo.jpg';
+                        }}
+                      />
                       <Share2 className="w-3.5 h-3.5" />
                       <span className="hidden sm:inline">Compartilhar</span>
                     </>

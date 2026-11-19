@@ -263,6 +263,7 @@ export default function App() {
     if (!audio) return;
 
     if (currentSong?.audioUrl) {
+      syncMediaSessionMetadata(currentSong);
       if (audio.getAttribute('data-loaded-url') !== currentSong.audioUrl) {
         audio.setAttribute('data-loaded-url', currentSong.audioUrl);
         audio.src = currentSong.audioUrl;
@@ -274,6 +275,7 @@ export default function App() {
         audio.play().catch((err) => console.log('Audio autoplay prevented:', err));
       }
     } else {
+      syncMediaSessionMetadata(null);
       audio.pause();
       audio.removeAttribute('data-loaded-url');
       audio.removeAttribute('src');
@@ -289,6 +291,83 @@ export default function App() {
     if (!audio) return;
     audio.volume = isMuted ? 0 : volume;
   }, [volume, isMuted]);
+
+  const syncMediaSessionMetadata = (song: Song | null) => {
+    if (typeof document !== 'undefined') {
+      document.title = song
+        ? `${song.title} • ${song.artist} — Beto's Radio`
+        : "Beto's Radio - Som Retrô-Futurista & Hi-Fi";
+      const ogTitle = document.querySelector('meta[property="og:title"]');
+      const ogDescription = document.querySelector('meta[property="og:description"]');
+      const ogImage = document.querySelector('meta[property="og:image"]');
+      const twitterImage = document.querySelector('meta[name="twitter:image"]');
+      const resolvedCover = getAbsoluteArtworkUrl(song?.coverUrl || '/logo.jpg');
+      if (ogTitle) {
+        ogTitle.setAttribute('content', "Beto's Radio - Rádio com poder IA");
+      }
+      if (ogDescription) {
+        ogDescription.setAttribute(
+          'content',
+          "Beto's Radio - Transmissão musical exclusiva com IA. Desfrute o poder da rádio IA!"
+        );
+      }
+      if (ogImage) ogImage.setAttribute('content', resolvedCover);
+      if (twitterImage) twitterImage.setAttribute('content', resolvedCover);
+    }
+
+    if (
+      typeof navigator === 'undefined' ||
+      !('mediaSession' in navigator) ||
+      typeof MediaMetadata === 'undefined'
+    ) {
+      return;
+    }
+
+    const ms = navigator.mediaSession;
+    if (!song) {
+      ms.metadata = null;
+      ms.playbackState = 'none';
+      return;
+    }
+
+    const buildMetadata = (coverSrc: string) => {
+      const artworkType = inferImageMimeType(coverSrc);
+      const sizes = ['96x96', '128x128', '192x192', '256x256', '384x384', '512x512'];
+      const artwork: MediaImage[] = sizes.map((size) => ({
+        src: coverSrc,
+        sizes: size,
+        ...(artworkType ? { type: artworkType } : {}),
+      }));
+
+      ms.metadata = new MediaMetadata({
+        title: song.title || "Beto's Radio",
+        artist: song.artist || "Beto's Radio",
+        album: song.album || "Beto's Radio • 104.2 FM",
+        artwork,
+      });
+    };
+
+    const primaryCover = getAbsoluteArtworkUrl(song.coverUrl || '/logo.jpg');
+    buildMetadata(primaryCover);
+
+    // If external cover fails to load/decode, automatically swap lock-screen artwork to same-origin proxy or station logo
+    if (typeof Image !== 'undefined' && primaryCover !== `${window.location.origin}/logo.jpg`) {
+      const probe = new Image();
+      probe.onerror = () => {
+        if (currentSongIdRef.current !== song.id) return;
+        const proxyCover = `${window.location.origin}/api/share-cover?track=${encodeURIComponent(song.id)}`;
+        const proxyProbe = new Image();
+        proxyProbe.onload = () => {
+          if (currentSongIdRef.current === song.id) buildMetadata(proxyCover);
+        };
+        proxyProbe.onerror = () => {
+          if (currentSongIdRef.current === song.id) buildMetadata(`${window.location.origin}/logo.jpg`);
+        };
+        proxyProbe.src = proxyCover;
+      };
+      probe.src = primaryCover;
+    }
+  };
 
   const updateMediaSessionPosition = (pos: number, dur: number) => {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
@@ -412,9 +491,11 @@ export default function App() {
       setIsPlaying(true);
       return;
     }
-    if (currentTime > 3) {
+    const actualTime = audioRef.current ? audioRef.current.currentTime : currentTime;
+    if (actualTime > 3) {
       if (audioRef.current) audioRef.current.currentTime = 0;
       setCurrentTime(0);
+      updateMediaSessionPosition(0, durationRef.current);
       return;
     }
     setCurrentSongIndex((prev) => (((prev ?? 0) - 1 + songs.length) % songs.length));
@@ -452,36 +533,7 @@ export default function App() {
 
   // Media Session API: show player + album cover on mobile lock screens and handle lock-screen controls
   useEffect(() => {
-    if (
-      typeof navigator === 'undefined' ||
-      !('mediaSession' in navigator) ||
-      typeof MediaMetadata === 'undefined'
-    ) {
-      return;
-    }
-
-    const ms = navigator.mediaSession;
-    if (!currentSong) {
-      ms.metadata = null;
-      ms.playbackState = 'none';
-      return;
-    }
-
-    const artworkUrl = getAbsoluteArtworkUrl(currentSong.coverUrl || '/logo.jpg');
-    const artworkType = inferImageMimeType(artworkUrl);
-    const sizes = ['96x96', '128x128', '192x192', '256x256', '384x384', '512x512'];
-    const artwork: MediaImage[] = sizes.map((size) => ({
-      src: artworkUrl,
-      sizes: size,
-      ...(artworkType ? { type: artworkType } : {}),
-    }));
-
-    ms.metadata = new MediaMetadata({
-      title: currentSong.title || "Beto's Radio",
-      artist: currentSong.artist || "Beto's Radio",
-      album: currentSong.album || "Beto's Radio • AI Studio",
-      artwork,
-    });
+    syncMediaSessionMetadata(currentSong);
   }, [
     currentSong?.id,
     currentSong?.title,
@@ -511,6 +563,8 @@ export default function App() {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
     const ms = navigator.mediaSession;
 
+    // Register track-level actions (play/pause/previous/next/seekto/stop) without seekbackward/seekforward
+    // so iOS Safari and Android lock screens prioritize Previous Track and Next Track buttons alongside Pause.
     const actions: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
       [
         'play',
@@ -520,6 +574,7 @@ export default function App() {
             handlePlayPauseRef.current();
             return;
           }
+          syncMediaSessionMetadata(currentSongRef.current);
           if (audio) {
             audio
               .play()
@@ -550,28 +605,6 @@ export default function App() {
           } else {
             handleSeekRef.current(details.seekTime);
           }
-        },
-      ],
-      [
-        'seekbackward',
-        (details) => {
-          const audio = audioRef.current;
-          if (!audio || !currentSongRef.current) return;
-          const offset = details.seekOffset || 10;
-          handleSeekRef.current(Math.max(0, audio.currentTime - offset));
-        },
-      ],
-      [
-        'seekforward',
-        (details) => {
-          const audio = audioRef.current;
-          if (!audio || !currentSongRef.current) return;
-          const offset = details.seekOffset || 10;
-          const maxDur =
-            audio.duration && Number.isFinite(audio.duration)
-              ? audio.duration
-              : durationRef.current || audio.currentTime + offset;
-          handleSeekRef.current(Math.min(maxDur, audio.currentTime + offset));
         },
       ],
       [
@@ -690,18 +723,69 @@ export default function App() {
   };
 
   const handleShareSong = async (song: Song) => {
-    const shareUrl = `${window.location.origin}/?track=${encodeURIComponent(song.id)}`;
-    const shareText = `Ouça "${song.title}" de ${song.artist} na Beto's Radio!`;
+    const shareUrl = `${window.location.origin}/api/share?track=${encodeURIComponent(song.id)}`;
+    const shareTitle = "Beto's Radio - Rádio com poder IA";
+    const shareText =
+      "Beto's Radio - Rádio com poder IA - Beto's Radio - Transmissão musical exclusiva com IA. Desfrute o poder da rádio IA!";
+
+    const markShared = () => {
+      setSharedSongId(song.id);
+      setTimeout(() => setSharedSongId((prev) => (prev === song.id ? null : prev)), 2200);
+    };
 
     try {
       if (navigator.share) {
+        // Try attaching the song's album cover image file for native mobile share sheets
+        let coverFile: File | null = null;
+        if (typeof navigator.canShare === 'function') {
+          try {
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+            const coverRes = await fetch(`/api/share-cover?track=${encodeURIComponent(song.id)}`, {
+              signal: controller.signal,
+            });
+            window.clearTimeout(timeoutId);
+            if (coverRes.ok) {
+              const blob = await coverRes.blob();
+              const mime = blob.type || 'image/jpeg';
+              const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+              const safeSlug = (song.title || 'capa')
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '')
+                .slice(0, 40) || 'musica';
+              const candidate = new File([blob], `${safeSlug}.${ext}`, { type: mime });
+              if (navigator.canShare({ files: [candidate] })) {
+                coverFile = candidate;
+              }
+            }
+          } catch {
+            // Fall back to sharing link with OpenGraph cover image
+          }
+        }
+
+        if (coverFile) {
+          try {
+            await navigator.share({
+              title: shareTitle,
+              text: shareText,
+              url: shareUrl,
+              files: [coverFile],
+            });
+            markShared();
+            return;
+          } catch (fileShareErr: any) {
+            if (fileShareErr?.name === 'AbortError') return;
+            // Some share targets reject combined files+url; retry cleanly with url + OG cover preview
+          }
+        }
+
         await navigator.share({
-          title: `${song.title} • Beto's Radio`,
+          title: shareTitle,
           text: shareText,
           url: shareUrl,
         });
-        setSharedSongId(song.id);
-        setTimeout(() => setSharedSongId((prev) => (prev === song.id ? null : prev)), 2200);
+        markShared();
         return;
       }
     } catch (err: any) {
@@ -710,9 +794,8 @@ export default function App() {
     }
 
     try {
-      await navigator.clipboard.writeText(shareUrl);
-      setSharedSongId(song.id);
-      setTimeout(() => setSharedSongId((prev) => (prev === song.id ? null : prev)), 2200);
+      await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
+      markShared();
     } catch (err) {
       console.error('Clipboard copy failed:', err);
     }
@@ -868,8 +951,26 @@ export default function App() {
         onLoadedMetadata={handleLoadedMetadata}
         onDurationChange={handleDurationChange}
         onEnded={handleSongEnded}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onPlay={() => {
+          setIsPlaying(true);
+          syncMediaSessionMetadata(currentSongRef.current);
+          if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = 'playing';
+          }
+          if (audioRef.current) {
+            const d =
+              audioRef.current.duration && Number.isFinite(audioRef.current.duration)
+                ? audioRef.current.duration
+                : durationRef.current;
+            updateMediaSessionPosition(audioRef.current.currentTime || 0, d);
+          }
+        }}
+        onPause={() => {
+          setIsPlaying(false);
+          if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = currentSongRef.current ? 'paused' : 'none';
+          }
+        }}
         preload="auto"
         playsInline
         {...({ 'x-webkit-airplay': 'allow' } as Record<string, string>)}
