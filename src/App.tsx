@@ -10,6 +10,7 @@ import { AdminPanelModal } from './components/AdminPanelModal';
 import { useAdmin } from './context/AdminContext';
 import { generateAutomaticLyrics } from './utils/lyricGenerator';
 import { loadCachedDurations, probeAudioDuration, saveCachedDuration } from './utils/audioDuration';
+import { useYouTubeCast } from './hooks/useYouTubeCast';
 
 function getAbsoluteArtworkUrl(url?: string): string {
   const fallback = `${window.location.origin}/logo.jpg`;
@@ -50,7 +51,6 @@ export default function App() {
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
   const [isRepeat, setIsRepeat] = useState<boolean>(false);
   const [isRadioMode, setIsRadioMode] = useState<boolean>(true);
-  const [isCastActive, setIsCastActive] = useState<boolean>(false);
 
   // Like & Share state
   const [likedSongIds, setLikedSongIds] = useState<string[]>(() => {
@@ -87,10 +87,39 @@ export default function App() {
   const durationRef = useRef<number>(duration);
   durationRef.current = duration;
   const lastMediaSessionPosUpdateRef = useRef<number>(0);
+  const lastCountedSongIdRef = useRef<string | null>(null);
+  const castModeRef = useRef<string>('none');
   const handlePlayPauseRef = useRef<() => void>(() => {});
   const handleNextRef = useRef<() => void>(() => {});
   const handlePrevRef = useRef<() => void>(() => {});
   const handleSeekRef = useRef<(time: number) => void>(() => {});
+
+  const recordSongPlay = async (songId?: string | null) => {
+    if (!songId) return;
+    if (lastCountedSongIdRef.current === songId) return;
+    lastCountedSongIdRef.current = songId;
+
+    // Optimistic increment
+    setSongs((prev) =>
+      prev.map((s) => (s.id === songId ? { ...s, plays: (s.plays || 0) + 1 } : s))
+    );
+
+    try {
+      const res = await fetch(`/api/songs/${encodeURIComponent(songId)}/play`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data.plays === 'number') {
+          setSongs((prev) =>
+            prev.map((s) => (s.id === songId ? { ...s, plays: data.plays } : s))
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to persist play count:', err);
+    }
+  };
 
   // Fetch songs from server (Supabase / Vercel Blob / local JSON)
   const fetchSongs = async (preserveCurrentTrack = false) => {
@@ -271,7 +300,7 @@ export default function App() {
       }
       setCurrentTime(0);
       setDuration(resolvedDurations[currentSong.audioUrl] ?? currentSong.duration ?? 0);
-      if (isPlaying) {
+      if (isPlaying && castModeRef.current !== 'chromecast') {
         audio.play().catch((err) => console.log('Audio autoplay prevented:', err));
       }
     } else {
@@ -444,7 +473,42 @@ export default function App() {
     }
   };
 
+  const cast = useYouTubeCast({
+    audioRef,
+    songs,
+    currentSong,
+    currentSongIndex,
+    onSelectSongIndex: (idx) => {
+      setCurrentSongIndex(idx);
+    },
+    onSyncPlayState: (playing) => {
+      setIsPlaying(playing);
+    },
+    onSyncTime: (time) => {
+      setCurrentTime(time);
+    },
+    onSyncDuration: (dur) => {
+      if (dur > 0) setDuration(dur);
+    },
+    onSongStartedOnCast: (songId) => {
+      void recordSongPlay(songId);
+    },
+    onOpenCastModal: () => {
+      setIsCastModalOpen(true);
+    },
+  });
+  castModeRef.current = cast.castMode;
+
   const handlePlayPause = () => {
+    if (cast.castMode === 'chromecast') {
+      if (!currentSong && songs.length > 0) {
+        setCurrentSongIndex(0);
+        setIsPlaying(true);
+        return;
+      }
+      if (cast.castPlayPause()) return;
+    }
+
     const audio = audioRef.current;
     if (!audio) return;
 
@@ -477,9 +541,12 @@ export default function App() {
     }
     if (isShuffle) {
       const randomIdx = Math.floor(Math.random() * songs.length);
+      if (randomIdx === currentSongIndex) lastCountedSongIdRef.current = null;
       setCurrentSongIndex(randomIdx);
     } else {
-      setCurrentSongIndex((prev) => ((prev ?? -1) + 1) % songs.length);
+      const nextIdx = (currentSongIndex + 1) % songs.length;
+      if (nextIdx === currentSongIndex) lastCountedSongIdRef.current = null;
+      setCurrentSongIndex(nextIdx);
     }
     setIsPlaying(true);
   };
@@ -491,6 +558,16 @@ export default function App() {
       setIsPlaying(true);
       return;
     }
+    if (cast.castMode === 'chromecast') {
+      if (currentTime > 3) {
+        cast.castSeek(0);
+        return;
+      }
+      setCurrentSongIndex((prev) => (((prev ?? 0) - 1 + songs.length) % songs.length));
+      setIsPlaying(true);
+      return;
+    }
+
     const actualTime = audioRef.current ? audioRef.current.currentTime : currentTime;
     if (actualTime > 3) {
       if (audioRef.current) audioRef.current.currentTime = 0;
@@ -503,6 +580,7 @@ export default function App() {
   };
 
   const handleSongEnded = () => {
+    lastCountedSongIdRef.current = null;
     if (isRepeat) {
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
@@ -515,6 +593,9 @@ export default function App() {
 
   const handleSeek = (time: number) => {
     if (!currentSong) return;
+    if (cast.castMode === 'chromecast' && cast.castSeek(time)) {
+      return;
+    }
     if (audioRef.current) {
       audioRef.current.currentTime = time;
       setCurrentTime(time);
@@ -643,8 +724,14 @@ export default function App() {
   const handleSelectSong = (song: Song) => {
     const idx = songs.findIndex((s) => s.id === song.id);
     if (idx !== -1) {
+      if (idx === currentSongIndex) {
+        lastCountedSongIdRef.current = null;
+      }
       setCurrentSongIndex(idx);
       setIsPlaying(true);
+      if (cast.castMode === 'chromecast') {
+        cast.castSelectSong(song);
+      }
     }
   };
 
@@ -825,114 +912,6 @@ export default function App() {
     }
   };
 
-  const [castFeedback, setCastFeedback] = useState<{
-    error?: string | null;
-    status?: string | null;
-  }>({});
-
-  const ensureTrackLoadedForCast = (): boolean => {
-    const audio = audioRef.current;
-    if (!audio) return false;
-    if (currentSong?.audioUrl) {
-      if (audio.getAttribute('data-loaded-url') !== currentSong.audioUrl) {
-        audio.setAttribute('data-loaded-url', currentSong.audioUrl);
-        audio.src = currentSong.audioUrl;
-        audio.load();
-      }
-      return true;
-    }
-    if (songs.length > 0 && songs[0]?.audioUrl) {
-      const firstSong = songs[0];
-      audio.setAttribute('data-loaded-url', firstSong.audioUrl);
-      audio.src = firstSong.audioUrl;
-      audio.load();
-      setCurrentSongIndex(0);
-      return true;
-    }
-    return false;
-  };
-
-  // Direct Cast trigger from the Cast button (sends directly on Android / Chrome / AirPlay)
-  const handleDirectCast = async () => {
-    setCastFeedback({});
-
-    if (isCastActive) {
-      setIsCastModalOpen(true);
-      return;
-    }
-
-    const audio = audioRef.current as any;
-    const w = window as any;
-    const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
-    const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
-
-    try {
-      // 1. Android Chrome: W3C Remote Playback opens native Android device picker directly
-      if (isAndroid && audio?.remote && typeof audio.remote.prompt === 'function') {
-        const hadSrc = Boolean(audio.currentSrc);
-        const hasTrack = ensureTrackLoadedForCast();
-        if (!hadSrc && hasTrack) {
-          await new Promise((r) => window.setTimeout(r, 80));
-        }
-        await audio.remote.prompt();
-        return;
-      }
-
-      // 2. Desktop Chrome: Google Cast Web Sender SDK
-      const context = w.cast?.framework?.CastContext?.getInstance?.();
-      if (context && typeof context.requestSession === 'function') {
-        await context.requestSession();
-        return;
-      }
-
-      // 3. Fallback W3C Remote Playback (Android / Edge / Chrome)
-      if (audio?.remote && typeof audio.remote.prompt === 'function') {
-        const hadSrc = Boolean(audio.currentSrc);
-        const hasTrack = ensureTrackLoadedForCast();
-        if (!hadSrc && hasTrack) {
-          await new Promise((r) => window.setTimeout(r, 80));
-        }
-        await audio.remote.prompt();
-        return;
-      }
-
-      // 4. Apple Safari / iOS AirPlay Picker
-      if (audio && typeof audio.webkitShowPlaybackTargetPicker === 'function') {
-        ensureTrackLoadedForCast();
-        audio.webkitShowPlaybackTargetPicker();
-        return;
-      }
-
-      setCastFeedback({
-        error: isInIframe
-          ? 'O navegador bloqueia a descoberta de Chromecast dentro do iframe de preview. Abra diretamente em https://betosradio.com no Chrome ou Safari.'
-          : null,
-      });
-      setIsCastModalOpen(true);
-    } catch (err: any) {
-      const code = err?.code || err?.name || '';
-      const msg = String(err?.message || err || '');
-      if (code === 'cancel' || code === 'AbortError' || /cancel|abort/i.test(msg)) {
-        return;
-      }
-
-      let friendlyError = `Não foi possível abrir o Cast automaticamente (${msg || 'recurso indisponível'}).`;
-      if (/no_devices_found|NotFoundError/i.test(`${code} ${msg}`)) {
-        friendlyError =
-          'Nenhum Chromecast/TV encontrado no mesmo Wi-Fi. Verifique se o celular/PC e a TV estão na mesma rede.';
-      } else if (/InvalidStateError|NotSupportedError/i.test(`${code} ${msg}`)) {
-        friendlyError =
-          'Dê Play em uma música primeiro e toque em Cast novamente, ou use o menu ⋮ → Transmitir do Chrome.';
-      } else if (/NotAllowedError|SecurityError/i.test(`${code} ${msg}`) || isInIframe) {
-        friendlyError =
-          'O navegador bloqueou o Cast nesta janela. Acesse diretamente em https://betosradio.com no Chrome.';
-      }
-
-      setCastFeedback({ error: friendlyError });
-      setIsCastModalOpen(true);
-    }
-  };
-
   // Creator Area handler
   const handleOpenCreatorArea = () => {
     if (isAdmin) {
@@ -953,6 +932,7 @@ export default function App() {
         onEnded={handleSongEnded}
         onPlay={() => {
           setIsPlaying(true);
+          void recordSongPlay(currentSongRef.current?.id);
           syncMediaSessionMetadata(currentSongRef.current);
           if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
             navigator.mediaSession.playbackState = 'playing';
@@ -980,10 +960,12 @@ export default function App() {
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 md:py-8 flex-1 flex flex-col">
         {/* Top Header Bar (Only Cast and Área do Criador buttons) */}
         <StationHeader
-          onOpenCast={handleDirectCast}
+          onOpenCast={cast.handleCastButtonClick}
+          onPrepareCast={cast.prepareCast}
           onOpenCreatorArea={handleOpenCreatorArea}
           isCreatorMode={isAdmin}
-          isCastActive={isCastActive}
+          isCastActive={cast.isCastActive}
+          connectedDeviceName={cast.connectedDeviceName}
           trackCount={songs.length}
         />
 
@@ -999,7 +981,8 @@ export default function App() {
             isShuffle={isShuffle}
             isRepeat={isRepeat}
             isRadioMode={isRadioMode}
-            isCastActive={isCastActive}
+            isCastActive={cast.isCastActive}
+            connectedDeviceName={cast.connectedDeviceName}
             onPlayPause={handlePlayPause}
             onPrev={handlePrev}
             onNext={handleNext}
@@ -1012,7 +995,9 @@ export default function App() {
             onToggleShuffle={() => setIsShuffle(!isShuffle)}
             onToggleRepeat={() => setIsRepeat(!isRepeat)}
             onToggleRadioMode={() => setIsRadioMode(!isRadioMode)}
-            onOpenCast={handleDirectCast}
+            onOpenCast={cast.handleCastButtonClick}
+            onPrepareCast={cast.prepareCast}
+            onDisconnectCast={cast.handleDisconnectCast}
             onOpenComposer={handleOpenCreatorArea}
             onOpenBandModal={handleOpenCreatorArea}
             isLiked={currentSong ? likedSongIds.includes(currentSong.id) : false}
@@ -1087,15 +1072,32 @@ export default function App() {
         isOpen={isCastModalOpen}
         onClose={() => {
           setIsCastModalOpen(false);
-          setCastFeedback({});
+          cast.clearCastMessages();
         }}
-        audioRef={audioRef}
         currentSong={currentSong}
         isPlaying={isPlaying}
-        onCastActiveChange={setIsCastActive}
-        externalError={castFeedback.error}
-        externalStatus={castFeedback.status}
-        onEnsureTrackLoaded={ensureTrackLoadedForCast}
+        isCastActive={cast.isCastActive}
+        castMode={cast.castMode}
+        castAvailable={cast.castAvailable}
+        castSdkState={cast.castSdkState}
+        connectedDeviceName={cast.connectedDeviceName}
+        remotePlaybackAvailable={cast.remotePlaybackAvailable}
+        audioOutputsCount={cast.audioOutputsCount}
+        canSelectAudioOutput={cast.canSelectAudioOutput}
+        castVolume={cast.castVolume}
+        isCastMuted={cast.isCastMuted}
+        isSearching={cast.isSearching}
+        isInIframe={cast.isInIframe}
+        statusMessage={cast.statusMessage}
+        errorMessage={cast.errorMessage}
+        onLaunchNativeCast={() => cast.launchNativeCastChooser(false)}
+        onSelectAudioOutput={cast.handleSelectAudioOutput}
+        onDisconnectCast={cast.handleDisconnectCast}
+        onPlayPause={handlePlayPause}
+        onPrev={handlePrev}
+        onNext={handleNext}
+        onCastVolumeChange={cast.handleCastVolumeChange}
+        onCastToggleMute={cast.handleCastToggleMute}
       />
 
       <CreatorLoginModal

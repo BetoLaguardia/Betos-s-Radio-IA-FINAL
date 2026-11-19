@@ -3,17 +3,21 @@ import { Radio, Cast, Lock, ShieldCheck, FolderCog } from 'lucide-react';
 
 interface StationHeaderProps {
   onOpenCast: () => void;
+  onPrepareCast?: () => void;
   onOpenCreatorArea: () => void;
   isCreatorMode: boolean;
   isCastActive: boolean;
+  connectedDeviceName?: string | null;
   trackCount: number;
 }
 
 export const StationHeader: React.FC<StationHeaderProps> = ({
   onOpenCast,
+  onPrepareCast,
   onOpenCreatorArea,
   isCreatorMode,
   isCastActive,
+  connectedDeviceName,
   trackCount,
 }) => {
   return (
@@ -54,18 +58,25 @@ export const StationHeader: React.FC<StationHeaderProps> = ({
 
       {/* Main Top Actions (Only Cast & Área do Criador) */}
       <div className="flex flex-wrap items-center gap-2.5">
-        {/* Cast Device Button (Public) */}
+        {/* Cast Device Button (YouTube-style) */}
         <button
+          onPointerDown={onPrepareCast}
           onClick={onOpenCast}
-          title="Transmitir diretamente para TV, Chromecast ou outros dispositivos"
+          title={
+            isCastActive
+              ? `Transmitindo para ${connectedDeviceName || 'TV / Chromecast'}`
+              : 'Transmitir para TV, Chromecast ou outros dispositivos'
+          }
           className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-mono-code font-bold transition-all border ${
             isCastActive
-              ? 'bg-cyan-500/25 text-cyan-300 border-cyan-400'
+              ? 'bg-cyan-500/25 text-cyan-200 border-cyan-400 shadow-md shadow-cyan-500/20'
               : 'bg-white/5 hover:bg-white/10 text-white/80 border-white/10'
           }`}
         >
-          <Cast className="w-4 h-4 text-cyan-400" />
-          <span className="hidden sm:inline">Cast</span>
+          <Cast className={`w-4 h-4 ${isCastActive ? 'text-cyan-300 animate-pulse' : 'text-cyan-400'}`} />
+          <span className="hidden sm:inline">
+            {isCastActive ? connectedDeviceName || 'Transmitindo' : 'Cast'}
+          </span>
         </button>
 
         {/* Área do Criador Button */}

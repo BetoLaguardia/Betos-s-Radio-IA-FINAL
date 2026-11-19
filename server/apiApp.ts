@@ -26,6 +26,7 @@ import {
   inspectSupabaseCatalog,
   isSupabaseConfigured,
   isSupabaseWriteConfigured,
+  incrementSongPlaysInSupabase,
   updateSongLikesInSupabase,
   uploadMediaToSupabaseStorage,
   upsertSongToSupabase,
@@ -561,6 +562,71 @@ apiApp.post('/api/songs/:id/like', async (req: Request, res: Response): Promise<
   } catch (err: any) {
     console.error('Error toggling like on song:', err);
     res.status(500).json({ error: 'Erro ao atualizar curtida.', details: err?.message });
+  }
+});
+
+// 5.2. Increment song play count (persisted in Supabase DB / Storage fallback, Vercel Blob, or local JSON)
+apiApp.post('/api/songs/:id/play', async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+
+  try {
+    let supabaseExisting: StoredSong | null = null;
+    let blobExisting: StoredSong | null = null;
+
+    if (isSupabaseConfigured()) {
+      try {
+        supabaseExisting = await findSongInSupabase(id);
+      } catch (supabaseErr: any) {
+        console.warn('Supabase play lookup fallback:', supabaseErr?.message);
+      }
+    }
+    if (isBlobConfigured()) {
+      blobExisting = await findSongInBlob(id);
+    }
+
+    const localSongs = loadLocalSongs();
+    const localIndex = localSongs.findIndex((s) => s.id === id);
+    const localExisting = localIndex !== -1 ? localSongs[localIndex] : null;
+
+    const existing = supabaseExisting || blobExisting || localExisting;
+    if (!existing) {
+      res.status(404).json({ error: 'Música não encontrada.' });
+      return;
+    }
+
+    let nextPlays = Math.max(0, (existing.plays || 0) + 1);
+    let updatedSong: StoredSong = {
+      ...existing,
+      plays: nextPlays,
+    };
+
+    if (isSupabaseWriteConfigured()) {
+      try {
+        if (supabaseExisting) {
+          const synced = await incrementSongPlaysInSupabase(id);
+          if (synced.plays > 0) nextPlays = synced.plays;
+          if (synced.song) updatedSong = synced.song;
+        } else {
+          await upsertSongToSupabase(updatedSong);
+        }
+      } catch (supabaseErr: any) {
+        console.warn('Supabase play write fallback:', supabaseErr?.message);
+      }
+    }
+
+    if (isBlobConfigured() && blobExisting) {
+      await saveSongMetadataToBlob({ ...blobExisting, ...updatedSong, plays: nextPlays });
+    }
+
+    if (localIndex !== -1) {
+      localSongs[localIndex] = { ...updatedSong, plays: nextPlays };
+      saveLocalSongs(localSongs);
+    }
+
+    res.json({ success: true, plays: nextPlays, song: { ...updatedSong, plays: nextPlays } });
+  } catch (err: any) {
+    console.error('Error incrementing song play count:', err);
+    res.status(500).json({ error: 'Erro ao atualizar contador de reproduções.', details: err?.message });
   }
 });
 

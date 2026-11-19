@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Music, Play, Trash2, Clock, Sparkles, Filter, Search, Check, Disc, ExternalLink, Heart, Share2, RefreshCw, Edit3 } from 'lucide-react';
+import { Music, Play, Trash2, Clock, Sparkles, Filter, Search, Check, Disc, ExternalLink, Heart, Share2, RefreshCw, Edit3, Headphones } from 'lucide-react';
 import { Song } from '../types/song';
 import { useAdmin } from '../context/AdminContext';
 
@@ -230,6 +230,14 @@ export const PlaylistDrawer: React.FC<PlaylistDrawerProps> = ({
 
                 {/* Right: Actions */}
                 <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <span
+                    title={`${song.plays || 0} reproduções`}
+                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-[11px] font-mono-code text-cyan-300/80 bg-cyan-500/10 border border-cyan-500/15 tabular-nums"
+                  >
+                    <Headphones className="w-3 h-3 text-cyan-400" />
+                    <span>{(song.plays || 0).toLocaleString('pt-BR')}</span>
+                  </span>
+
                   {onToggleLike && (
                     <button
                       onClick={(e) => {

@@ -18,6 +18,7 @@ interface RadioSongRow {
   source_url?: string | null;
   suno_id?: string | null;
   likes?: number | null;
+  plays?: number | null;
   created_at?: string | null;
 }
 
@@ -147,11 +148,57 @@ function getSupabaseClient(): SupabaseClient {
   });
 }
 
+function isMissingPlaysColumnError(message?: string): boolean {
+  if (!message) return false;
+  return /column.*plays.*does not exist|Could not find the ['"]plays['"] column/i.test(message);
+}
+
+const PLAYS_STATS_PATH = '_stats/plays.json';
+
+async function loadPlaysStatsFallback(supabase: SupabaseClient): Promise<Record<string, number>> {
+  try {
+    const { data, error } = await supabase.storage.from(SUPABASE_MEDIA_BUCKET).download(PLAYS_STATS_PATH);
+    if (error || !data) return {};
+    const text = await data.text();
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function savePlaysStatsFallback(
+  supabase: SupabaseClient,
+  stats: Record<string, number>
+): Promise<void> {
+  const payload = Buffer.from(JSON.stringify(stats), 'utf8');
+  let { error } = await supabase.storage
+    .from(SUPABASE_MEDIA_BUCKET)
+    .upload(PLAYS_STATS_PATH, payload, {
+      contentType: 'application/json',
+      upsert: true,
+    });
+  if (error && /bucket.*not found/i.test(error.message)) {
+    await supabase.storage.createBucket(SUPABASE_MEDIA_BUCKET, { public: true });
+    const retry = await supabase.storage
+      .from(SUPABASE_MEDIA_BUCKET)
+      .upload(PLAYS_STATS_PATH, payload, {
+        contentType: 'application/json',
+        upsert: true,
+      });
+    error = retry.error;
+  }
+  if (error) {
+    throw new Error(`Erro ao salvar contador de reproduções no Storage: ${error.message}`);
+  }
+}
+
 function mapSupabaseRowsToSong(
   row: RadioSongRow,
   cover?: RadioCoverRow,
   band?: RadioBandImageRow,
-  lyr?: RadioLyricsRow
+  lyr?: RadioLyricsRow,
+  fallbackPlays?: number
 ): StoredSong {
   const bandInfo = band
     ? {
@@ -167,6 +214,13 @@ function mapSupabaseRowsToSong(
 
   const nanoBananaPrompt =
     cover?.nano_banana_prompt || band?.nano_banana_main_prompt || undefined;
+
+  const resolvedPlays =
+    typeof row.plays === 'number'
+      ? row.plays
+      : typeof fallbackPlays === 'number'
+        ? fallbackPlays
+        : 0;
 
   return {
     id: row.id,
@@ -186,6 +240,7 @@ function mapSupabaseRowsToSong(
     ...(band?.band_photo_url ? { bandPhotoUrl: band.band_photo_url } : {}),
     ...(bandInfo ? { bandInfo } : {}),
     likes: typeof row.likes === 'number' ? row.likes : 0,
+    plays: resolvedPlays,
     createdAt: row.created_at || new Date().toISOString(),
   };
 }
@@ -307,12 +362,19 @@ export async function findSongInSupabase(id: string): Promise<StoredSong | null>
 
   const covers = (coverRes.data || []) as RadioCoverRow[];
   const primaryCover = covers.find((c) => c.is_primary) || covers[0];
+  const rowData = songRes.data as RadioSongRow;
+  let fallbackPlays: number | undefined;
+  if (!Object.prototype.hasOwnProperty.call(rowData, 'plays')) {
+    const stats = await loadPlaysStatsFallback(supabase);
+    fallbackPlays = stats[id] ?? 0;
+  }
 
   return mapSupabaseRowsToSong(
-    songRes.data as RadioSongRow,
+    rowData,
     primaryCover,
     (bandRes.data as RadioBandImageRow | null) || undefined,
-    (lyrRes.data as RadioLyricsRow | null) || undefined
+    (lyrRes.data as RadioLyricsRow | null) || undefined,
+    fallbackPlays
   );
 }
 
@@ -365,6 +427,10 @@ export async function importSongsFromSupabase(): Promise<{
     lyricsBySongId.set(lyr.song_id, lyr);
   }
 
+  const hasPlaysColumn =
+    songRows.length === 0 || Object.prototype.hasOwnProperty.call(songRows[0], 'plays');
+  const fallbackStats = hasPlaysColumn ? {} : await loadPlaysStatsFallback(supabase);
+
   const importedSongs: StoredSong[] = songRows
     .filter((row) => Boolean(row.audio_url))
     .map((row) =>
@@ -372,7 +438,8 @@ export async function importSongsFromSupabase(): Promise<{
         row,
         coversBySongId.get(row.id),
         bandsBySongId.get(row.id),
-        lyricsBySongId.get(row.id)
+        lyricsBySongId.get(row.id),
+        hasPlaysColumn ? undefined : fallbackStats[row.id] ?? 0
       )
     );
 
@@ -412,14 +479,22 @@ export async function exportSongsToSupabase(songs: StoredSong[]): Promise<{ expo
     source_url: s.sourceUrl || null,
     suno_id: s.sunoId || null,
     likes: typeof s.likes === 'number' ? s.likes : 0,
+    plays: typeof s.plays === 'number' ? s.plays : 0,
     created_at: s.createdAt && !Number.isNaN(Date.parse(s.createdAt))
       ? new Date(s.createdAt).toISOString()
       : new Date().toISOString(),
   }));
 
-  const { error: songsErr } = await supabase
+  let { error: songsErr } = await supabase
     .from('radio_songs')
     .upsert(songPayloads, { onConflict: 'id' });
+  if (songsErr && isMissingPlaysColumnError(songsErr.message)) {
+    const legacyPayloads = songPayloads.map(({ plays: _plays, ...rest }) => rest);
+    const retry = await supabase
+      .from('radio_songs')
+      .upsert(legacyPayloads, { onConflict: 'id' });
+    songsErr = retry.error;
+  }
   if (songsErr) {
     throw new Error(`Erro ao enviar radio_songs: ${songsErr.message}`);
   }
@@ -507,6 +582,58 @@ export async function updateSongLikesInSupabase(
   }
 
   return findSongInSupabase(id);
+}
+
+export async function incrementSongPlaysInSupabase(
+  id: string
+): Promise<{ plays: number; song: StoredSong | null }> {
+  if (!isSupabaseWriteConfigured()) {
+    throw new Error(
+      'Para atualizar reproduções no Supabase, defina SUPABASE_SECRET_KEY ou SUPABASE_SERVICE_ROLE_KEY.'
+    );
+  }
+
+  const supabase = getSupabaseClient();
+  const { data: rowData, error: fetchErr } = await supabase
+    .from('radio_songs')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (fetchErr) {
+    throw new Error(`Erro ao consultar reproduções no Supabase: ${fetchErr.message}`);
+  }
+  if (!rowData) {
+    return { plays: 0, song: null };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(rowData, 'plays')) {
+    const nextPlays = Math.max(0, Number(rowData.plays || 0)) + 1;
+    const { error: updateErr } = await supabase
+      .from('radio_songs')
+      .update({ plays: nextPlays })
+      .eq('id', id);
+
+    if (!updateErr) {
+      const updated = await findSongInSupabase(id);
+      return { plays: nextPlays, song: updated };
+    }
+    if (!isMissingPlaysColumnError(updateErr.message)) {
+      throw new Error(`Erro ao atualizar reproduções no Supabase: ${updateErr.message}`);
+    }
+  }
+
+  // Fallback: store play counts inside _stats/plays.json in Supabase Storage bucket when SQL plays column doesn't exist yet
+  const stats = await loadPlaysStatsFallback(supabase);
+  const nextPlays = Math.max(0, Number(stats[id] || 0)) + 1;
+  stats[id] = nextPlays;
+  await savePlaysStatsFallback(supabase, stats);
+
+  const song = await findSongInSupabase(id);
+  return {
+    plays: nextPlays,
+    song: song ? { ...song, plays: nextPlays } : null,
+  };
 }
 
 export async function deleteSongFromSupabase(id: string): Promise<boolean> {

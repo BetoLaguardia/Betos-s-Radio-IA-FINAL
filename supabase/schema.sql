@@ -22,8 +22,12 @@ CREATE TABLE IF NOT EXISTS public.radio_songs (
   source_url TEXT,
   suno_id TEXT,
   likes INTEGER NOT NULL DEFAULT 0,
+  plays INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.radio_songs
+  ADD COLUMN IF NOT EXISTS plays INTEGER NOT NULL DEFAULT 0;
 
 -- 2. Tabela de Capas dos Álbuns / Singles (radio_covers)
 CREATE TABLE IF NOT EXISTS public.radio_covers (

@@ -22,6 +22,7 @@ export interface StoredSong {
   blobPathname?: string;
   fileSize?: number;
   likes?: number;
+  plays?: number;
   createdAt?: string;
 }
 
