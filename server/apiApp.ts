@@ -15,6 +15,7 @@ import {
   type StoredSong,
 } from './blobStorage.js';
 import {
+  createSupabaseSignedUploadUrl,
   deleteSongFromSupabase,
   exportSongsToSupabase,
   findSongInSupabase,
@@ -398,13 +399,24 @@ apiApp.post('/api/songs', async (req: Request, res: Response): Promise<void> => 
       await saveSongMetadataToBlob(newSong);
       sources.push('vercel-blob');
     } else if (!sources.includes('supabase')) {
+      if (process.env.VERCEL || process.env.NETLIFY) {
+        res.status(503).json({
+          error:
+            'Nenhum banco de produção configurado no servidor. Defina SUPABASE_URL e SUPABASE_SECRET_KEY nas Environment Variables da hospedagem.',
+        });
+        return;
+      }
       const songs = loadLocalSongs();
       songs.unshift(newSong);
       saveLocalSongs(songs);
       sources.push('local-json');
     }
 
-    res.status(201).json({ song: newSong, source: sources.join('+') || 'local-json' });
+    res.status(201).json({
+      song: newSong,
+      source: sources.join('+') || 'local-json',
+      savedToSupabase: sources.includes('supabase'),
+    });
   } catch (err: any) {
     console.error('Error saving song:', err);
     res.status(500).json({ error: err?.message || 'Erro ao salvar metadados da música.' });
@@ -1104,6 +1116,42 @@ apiApp.get('/api/supabase/inspect', async (req: Request, res: Response): Promise
   } catch (err: any) {
     console.error('Error inspecting Supabase catalog:', err);
     res.status(500).json({ error: err?.message || 'Erro ao inspecionar Supabase.' });
+  }
+});
+
+// 11.2. Supabase: Gerar URL assinada para upload direto do navegador ao Supabase Storage (bypassa limite de 4.5MB da Vercel/Netlify)
+apiApp.post('/api/supabase/signed-upload-url', async (req: Request, res: Response): Promise<void> => {
+  if (!isValidAdminRequest(req)) {
+    res.status(401).json({ error: 'Sessão de criador expirada ou inválida. Faça login novamente.' });
+    return;
+  }
+
+  if (!isSupabaseConfigured()) {
+    res.status(503).json({
+      error: 'SUPABASE_URL não configurada nas variáveis de ambiente do servidor.',
+    });
+    return;
+  }
+
+  if (!isSupabaseWriteConfigured()) {
+    res.status(403).json({
+      error: `Supabase em modo somente leitura (role atual: ${getSupabaseKeyRole()}). Defina SUPABASE_SECRET_KEY (sb_secret_...) ou SUPABASE_SERVICE_ROLE_KEY nas variáveis de ambiente do servidor.`,
+    });
+    return;
+  }
+
+  const rawFolder = req.body?.folder === 'covers' ? 'covers' : 'tracks';
+  const rawName = typeof req.body?.filename === 'string' ? req.body.filename : 'file';
+  const ext = path.extname(rawName).toLowerCase() || (rawFolder === 'tracks' ? '.mp3' : '.jpg');
+  const safeExt = ext.replace(/[^a-z0-9.]/g, '') || (rawFolder === 'tracks' ? '.mp3' : '.jpg');
+  const storagePath = `${rawFolder}/${Date.now()}-${Math.random().toString(36).substring(2, 8)}${safeExt}`;
+
+  try {
+    const signed = await createSupabaseSignedUploadUrl(storagePath);
+    res.json(signed);
+  } catch (err: any) {
+    console.error('Error creating Supabase signed upload URL:', err);
+    res.status(500).json({ error: err?.message || 'Erro ao gerar URL de upload do Supabase Storage.' });
   }
 });
 

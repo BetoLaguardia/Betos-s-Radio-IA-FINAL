@@ -127,7 +127,7 @@ export const SunoDownloaderModal: React.FC<SunoDownloaderModalProps> = ({
     setSuccessResult(null);
 
     try {
-      const { song, viaBlob } = await uploadSongViaVercelBlob({
+      const { song, viaBlob, viaSupabase } = await uploadSongViaVercelBlob({
         audioFile,
         coverFile,
         bandPhotoFile,
@@ -145,7 +145,9 @@ export const SunoDownloaderModal: React.FC<SunoDownloaderModalProps> = ({
 
       setSuccessResult({
         song,
-        message: viaBlob
+        message: viaSupabase
+          ? 'Arquivo de áudio, capa e metadados salvos diretamente no Supabase!'
+          : viaBlob
           ? 'Arquivo de áudio e capa salvos com acesso público no Vercel Blob!'
           : 'Arquivo de áudio, capa e metadados enviados com sucesso para o servidor!',
       });

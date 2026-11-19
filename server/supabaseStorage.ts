@@ -563,3 +563,44 @@ export async function uploadMediaToSupabaseStorage(
   const { data } = supabase.storage.from(SUPABASE_MEDIA_BUCKET).getPublicUrl(cleanPath);
   return data.publicUrl;
 }
+
+export async function createSupabaseSignedUploadUrl(storagePath: string): Promise<{
+  signedUrl: string;
+  token: string;
+  path: string;
+  publicUrl: string;
+}> {
+  if (!isSupabaseWriteConfigured()) {
+    throw new Error(
+      'Para enviar arquivos ao Supabase Storage, defina SUPABASE_SECRET_KEY ou SUPABASE_SERVICE_ROLE_KEY nas variáveis de ambiente do servidor.'
+    );
+  }
+
+  const supabase = getSupabaseClient();
+  const cleanPath = storagePath.replace(/^\/+/, '');
+
+  let { data, error } = await supabase.storage
+    .from(SUPABASE_MEDIA_BUCKET)
+    .createSignedUploadUrl(cleanPath, { upsert: true });
+
+  if (error && /bucket.*not found/i.test(error.message)) {
+    await supabase.storage.createBucket(SUPABASE_MEDIA_BUCKET, { public: true });
+    const retry = await supabase.storage
+      .from(SUPABASE_MEDIA_BUCKET)
+      .createSignedUploadUrl(cleanPath, { upsert: true });
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error || !data?.signedUrl) {
+    throw new Error(`Erro ao gerar URL assinada no Supabase Storage: ${error?.message || 'resposta inválida'}`);
+  }
+
+  const { data: pub } = supabase.storage.from(SUPABASE_MEDIA_BUCKET).getPublicUrl(cleanPath);
+  return {
+    signedUrl: data.signedUrl,
+    token: data.token,
+    path: data.path,
+    publicUrl: pub.publicUrl,
+  };
+}

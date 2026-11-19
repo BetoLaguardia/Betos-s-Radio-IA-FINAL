@@ -271,7 +271,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
     setUploadError(null);
 
     try {
-      const { song, viaBlob } = await uploadSongViaVercelBlob({
+      const { song, viaBlob, viaSupabase } = await uploadSongViaVercelBlob({
         audioFile: directAudioFile,
         coverFile: directCoverFile,
         bandPhotoFile: directBandPhotoFile,
@@ -291,7 +291,9 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
       });
 
       setUploadMsg(
-        viaBlob
+        viaSupabase
+          ? 'Áudio, capa e metadados salvos diretamente no Supabase (Storage + Tabelas SQL)!'
+          : viaBlob
           ? 'Áudio salvo com sucesso no Vercel Blob (acesso público) e adicionado à Rádio!'
           : 'Áudio e dados salvos com sucesso no servidor da rádio!'
       );
@@ -683,11 +685,11 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                       className="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-extrabold text-xs tracking-wider uppercase font-mono-code flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20 disabled:opacity-50"
                     >
                       {uploading ? (
-                        <span>{uploadStage || `Enviando para Vercel Blob (${uploadProgress}%)...`}</span>
+                        <span>{uploadStage || `Enviando (${uploadProgress}%)...`}</span>
                       ) : (
                         <>
                           <Upload className="w-4 h-4" />
-                          <span>Enviar MP3, Capa e Metadados para o Vercel Blob</span>
+                          <span>Enviar MP3, Capa e Metadados para o Supabase / Rádio</span>
                         </>
                       )}
                     </button>
