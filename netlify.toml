@@ -1,0 +1,14 @@
+[build.environment]
+  # These values are public by design (project URLs and the Supabase publishable
+  # key) and appear in committed data such as public storage links in
+  # data/songs.json. Real secrets (GEMINI_API_KEY, SUPABASE_SECRET_KEY,
+  # SUPABASE_SERVICE_ROLE_KEY, ADMIN_PASSWORD) stay covered by secrets scanning.
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL,VITE_SUPABASE_URL,SUPABASE_JWKS_URL,APP_URL,VITE_SUPABASE_PUBLISHABLE_KEY"
+
+[dev]
+  framework = "#custom"
+  command = "npx vite --port 5173 --strictPort"
+  targetPort = 5173
+
+[server]
+  path = "/api/*"
