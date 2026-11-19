@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { StoredSong } from './blobStorage';
+import type { StoredSong } from './blobStorage.ts';
 
 const DEFAULT_COVER =
   'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80';

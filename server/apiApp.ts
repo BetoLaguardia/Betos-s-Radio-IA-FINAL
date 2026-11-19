@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -13,7 +13,7 @@ import {
   saveSongMetadataToBlob,
   uploadBufferToBlob,
   type StoredSong,
-} from './blobStorage';
+} from './blobStorage.ts';
 import {
   deleteSongFromSupabase,
   exportSongsToSupabase,
@@ -28,7 +28,7 @@ import {
   updateSongLikesInSupabase,
   uploadMediaToSupabaseStorage,
   upsertSongToSupabase,
-} from './supabaseStorage';
+} from './supabaseStorage.ts';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const UPLOADS_DIR = path.resolve(process.cwd(), 'public', 'uploads');
@@ -71,17 +71,21 @@ function saveLocalSongs(songs: StoredSong[]) {
 }
 
 // Stateless HMAC Admin Token Helpers (safe for Vercel Serverless)
-function getSigningSecret(): string {
-  return (
-    process.env.ADMIN_TOKEN_SECRET ||
-    process.env.BLOB_READ_WRITE_TOKEN ||
-    'betos-radio-creator-secret-2026'
-  );
+// Signing secret comes only from the environment. ADMIN_PASSWORD is used as a
+// last resort so tokens still work when no dedicated secret is configured.
+function getSigningSecret(): string | null {
+  const secret =
+    process.env.ADMIN_TOKEN_SECRET?.trim() ||
+    process.env.BLOB_READ_WRITE_TOKEN?.trim() ||
+    process.env.ADMIN_PASSWORD?.trim();
+  return secret || null;
 }
 
 function createSignedAdminToken(): string {
+  const secret = getSigningSecret();
+  if (!secret) throw new Error('Admin signing secret is not configured.');
   const issuedAt = Date.now().toString();
-  const sig = crypto.createHmac('sha256', getSigningSecret()).update(issuedAt).digest('hex');
+  const sig = crypto.createHmac('sha256', secret).update(issuedAt).digest('hex');
   return `beto.${issuedAt}.${sig}`;
 }
 
@@ -100,7 +104,9 @@ function verifySignedAdminToken(token?: string | null): boolean {
   const maxAgeMs = 30 * 24 * 60 * 60 * 1000;
   if (Date.now() - ts > maxAgeMs) return false;
 
-  const expectedSig = crypto.createHmac('sha256', getSigningSecret()).update(issuedAt).digest('hex');
+  const secret = getSigningSecret();
+  if (!secret) return false;
+  const expectedSig = crypto.createHmac('sha256', secret).update(issuedAt).digest('hex');
   try {
     return crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expectedSig, 'hex'));
   } catch {
@@ -220,10 +226,17 @@ apiApp.get('/api/health', (req: Request, res: Response) => {
 apiApp.post('/api/admin/verify', (req: Request, res: Response) => {
   const { password } = req.body || {};
   const envPassword = process.env.ADMIN_PASSWORD?.trim();
-  const validPasswords = ['P@drao283011', 'suno2026', 'admin'];
-  if (envPassword) validPasswords.push(envPassword);
+  if (!envPassword) {
+    res.status(503).json({ success: false, error: 'ADMIN_PASSWORD não configurado no servidor.' });
+    return;
+  }
 
-  if (password && typeof password === 'string' && validPasswords.includes(password.trim())) {
+  const candidate = typeof password === 'string' ? password.trim() : '';
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(envPassword);
+  const matches = a.length === b.length && crypto.timingSafeEqual(a, b);
+
+  if (matches) {
     res.json({
       success: true,
       token: createSignedAdminToken(),

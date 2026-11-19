@@ -14,3 +14,9 @@ musicas/
 *.mp3
 *.wav
 *.mp4
+
+# Build output of the local Node server bundle
+server.js
+
+# Local Netlify folder
+.netlify
