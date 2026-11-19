@@ -228,7 +228,11 @@ export const FloatingBottomPlayer: React.FC<FloatingBottomPlayerProps> = ({
                   <span className="absolute right-0 top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-white rounded-full shadow-md scale-0 group-hover:scale-100 transition-transform" />
                 </div>
               </div>
-              <span className="w-8">{formatTime(duration)}</span>
+              <span className={`w-11 ${isPlaying ? 'text-amber-300 font-semibold' : ''}`}>
+                {duration > 0 && (isPlaying || currentTime > 0)
+                  ? `-${formatTime(Math.max(0, duration - currentTime))}`
+                  : formatTime(duration)}
+              </span>
             </div>
           </div>
 

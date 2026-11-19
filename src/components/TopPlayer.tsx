@@ -239,7 +239,18 @@ export const TopPlayer: React.FC<TopPlayerProps> = ({
 
             <div className="flex justify-between text-[11px] font-mono-code text-white/50">
               <span>{formatTime(currentTime)}</span>
-              <span>{formatTime(duration)}</span>
+              <span
+                title={
+                  duration > 0 && (isPlaying || currentTime > 0)
+                    ? 'Tempo restante (contagem regressiva) / Duração total'
+                    : 'Duração total da faixa'
+                }
+                className={isPlaying ? 'text-cyan-300 font-semibold' : ''}
+              >
+                {duration > 0 && (isPlaying || currentTime > 0)
+                  ? `-${formatTime(Math.max(0, duration - currentTime))} / ${formatTime(duration)}`
+                  : formatTime(duration)}
+              </span>
             </div>
           </div>
 

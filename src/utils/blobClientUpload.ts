@@ -1,5 +1,6 @@
 import { upload } from '@vercel/blob/client';
 import { Song } from '../types/song';
+import { getAudioDurationFromFile } from './audioDuration';
 
 export interface BlobSongUploadInput {
   audioFile: File;
@@ -80,6 +81,7 @@ export async function uploadSongViaVercelBlob(input: BlobSongUploadInput): Promi
     onProgress,
   } = input;
 
+  const measuredDuration = await getAudioDurationFromFile(audioFile);
   const blobEnabled = await isVercelBlobEnabled();
 
   if (!blobEnabled) {
@@ -95,6 +97,7 @@ export async function uploadSongViaVercelBlob(input: BlobSongUploadInput): Promi
     formData.append('stylePrompt', stylePrompt?.trim() || 'Indie Chamber Pop / Complex Harmonies');
     formData.append('mood', mood?.trim() || 'Contemplativo & Profundo');
     formData.append('rhythm', rhythm?.trim() || 'Moderato (100 BPM)');
+    if (measuredDuration) formData.append('duration', String(measuredDuration));
     formData.append('lyrics', lyrics?.trim() || '');
     formData.append('nanoBananaPrompt', nanoBananaPrompt?.trim() || '');
 
@@ -182,6 +185,7 @@ export async function uploadSongViaVercelBlob(input: BlobSongUploadInput): Promi
     stylePrompt: stylePrompt?.trim() || 'Indie Chamber Pop / Complex Harmonies',
     mood: mood?.trim() || 'Contemplativo & Melancólico',
     rhythm: rhythm?.trim() || 'Andante Moderato (100 BPM)',
+    ...(measuredDuration ? { duration: measuredDuration } : {}),
     lyrics: lyrics?.trim() || '[Áudio Carregado via Vercel Blob]',
     nanoBananaPrompt:
       nanoBananaPrompt?.trim() || `Band portrait in analog vintage format for ${finalTitle} --ar 16:9`,

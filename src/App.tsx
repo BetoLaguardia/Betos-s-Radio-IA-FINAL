@@ -9,6 +9,7 @@ import { CreatorLoginModal } from './components/CreatorLoginModal';
 import { AdminPanelModal } from './components/AdminPanelModal';
 import { useAdmin } from './context/AdminContext';
 import { generateAutomaticLyrics } from './utils/lyricGenerator';
+import { loadCachedDurations, probeAudioDuration, saveCachedDuration } from './utils/audioDuration';
 
 export default function App() {
   const { isAdmin, getAuthHeaders } = useAdmin();
@@ -44,6 +45,10 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentSongIdRef = useRef<string | null>(null);
   const initialDeepLinkHandledRef = useRef<boolean>(false);
+  const probedUrlsRef = useRef<Set<string>>(new Set());
+  const [resolvedDurations, setResolvedDurations] = useState<Record<string, number>>(() =>
+    loadCachedDurations()
+  );
 
   const currentSong = songs[currentSongIndex] || null;
   currentSongIdRef.current = currentSong?.id ?? null;
@@ -54,7 +59,12 @@ export default function App() {
       const res = await fetch('/api/songs', { cache: 'no-store' });
       const data = await res.json();
       if (Array.isArray(data.songs)) {
-        const nextSongs = data.songs as Song[];
+        const cached = loadCachedDurations();
+        const nextSongs = (data.songs as Song[]).map((song) =>
+          song.audioUrl && cached[song.audioUrl]
+            ? { ...song, duration: cached[song.audioUrl] }
+            : song
+        );
         setSongs(nextSongs);
 
         // Support deep-linked shared track (?track=<id>) on initial load
@@ -124,6 +134,52 @@ export default function App() {
     return raw;
   }, [currentSong]);
 
+  // Probe real audio durations in background so every playlist item shows its true length
+  useEffect(() => {
+    if (songs.length === 0) return;
+
+    const urlsToProbe = Array.from(
+      new Set(
+        songs
+          .map((s) => s.audioUrl)
+          .filter(
+            (url): url is string =>
+              Boolean(url) && !resolvedDurations[url] && !probedUrlsRef.current.has(url)
+          )
+      )
+    );
+
+    if (urlsToProbe.length === 0) return;
+
+    let cancelled = false;
+    const queue = [...urlsToProbe];
+
+    const worker = async () => {
+      while (!cancelled && queue.length > 0) {
+        const url = queue.shift();
+        if (!url) break;
+        probedUrlsRef.current.add(url);
+        const measured = await probeAudioDuration(url);
+        if (cancelled || !measured || measured <= 0) continue;
+
+        saveCachedDuration(url, measured);
+        setResolvedDurations((prev) => (prev[url] === measured ? prev : { ...prev, [url]: measured }));
+        setSongs((prev) =>
+          prev.map((s) => (s.audioUrl === url ? { ...s, duration: measured } : s))
+        );
+      }
+    };
+
+    const concurrency = Math.min(3, queue.length);
+    for (let i = 0; i < concurrency; i++) {
+      void worker();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [songs, resolvedDurations]);
+
   // Handle Audio source and events
   useEffect(() => {
     const audio = audioRef.current;
@@ -132,7 +188,8 @@ export default function App() {
     if (currentSong?.audioUrl) {
       audio.src = currentSong.audioUrl;
       audio.load();
-      setDuration(currentSong.duration || 120);
+      setCurrentTime(0);
+      setDuration(resolvedDurations[currentSong.audioUrl] ?? currentSong.duration ?? 0);
       if (isPlaying) {
         audio.play().catch((err) => console.log('Audio autoplay prevented:', err));
       }
@@ -145,6 +202,25 @@ export default function App() {
     audio.volume = isMuted ? 0 : volume;
   }, [volume, isMuted]);
 
+  const applyRealAudioDuration = (rawDuration: number) => {
+    if (!rawDuration || isNaN(rawDuration) || rawDuration === Infinity || rawDuration <= 0) return;
+    setDuration(rawDuration);
+    if (currentSong?.audioUrl) {
+      const rounded = Math.round(rawDuration);
+      saveCachedDuration(currentSong.audioUrl, rounded);
+      setResolvedDurations((prev) =>
+        prev[currentSong.audioUrl] === rounded ? prev : { ...prev, [currentSong.audioUrl]: rounded }
+      );
+      setSongs((prev) =>
+        prev.map((s) =>
+          s.audioUrl === currentSong.audioUrl && s.duration !== rounded
+            ? { ...s, duration: rounded }
+            : s
+        )
+      );
+    }
+  };
+
   // Audio Event Handlers
   const handleTimeUpdate = () => {
     if (audioRef.current) {
@@ -156,9 +232,9 @@ export default function App() {
     if (audioRef.current) {
       const d = audioRef.current.duration;
       if (d && !isNaN(d) && d !== Infinity) {
-        setDuration(d);
-      } else {
-        setDuration(currentSong?.duration || 120);
+        applyRealAudioDuration(d);
+      } else if (currentSong) {
+        setDuration(resolvedDurations[currentSong.audioUrl] ?? currentSong.duration ?? 0);
       }
     }
   };
@@ -167,7 +243,7 @@ export default function App() {
     if (audioRef.current) {
       const d = audioRef.current.duration;
       if (d && !isNaN(d) && d !== Infinity) {
-        setDuration(d);
+        applyRealAudioDuration(d);
       }
     }
   };
@@ -423,6 +499,8 @@ export default function App() {
               songs={songs}
               currentSong={currentSong}
               isPlaying={isPlaying}
+              currentTime={currentTime}
+              activeDuration={duration}
               likedSongIds={likedSongIds}
               sharedSongId={sharedSongId}
               onSelectSong={handleSelectSong}

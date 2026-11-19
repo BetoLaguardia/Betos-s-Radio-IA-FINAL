@@ -863,7 +863,7 @@ apiApp.post(
       stylePrompt: body.stylePrompt && body.stylePrompt.trim() ? body.stylePrompt.trim() : 'Indie Chamber Pop / Complex Harmony',
       mood: body.mood && body.mood.trim() ? body.mood.trim() : 'Contemplativo & Profundo',
       rhythm: body.rhythm && body.rhythm.trim() ? body.rhythm.trim() : 'Moderato (100 BPM)',
-      duration: 120,
+      duration: Number(body.duration) > 0 ? Math.round(Number(body.duration)) : 120,
       lyrics: body.lyrics && body.lyrics.trim() ? body.lyrics.trim() : '[Áudio Carregado Localmente com Sucesso]',
       nanoBananaPrompt:
         body.nanoBananaPrompt && body.nanoBananaPrompt.trim()

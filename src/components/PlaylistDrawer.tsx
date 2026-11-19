@@ -7,6 +7,8 @@ interface PlaylistDrawerProps {
   songs: Song[];
   currentSong: Song | null;
   isPlaying: boolean;
+  currentTime?: number;
+  activeDuration?: number;
   likedSongIds?: string[];
   sharedSongId?: string | null;
   onSelectSong: (song: Song) => void;
@@ -22,6 +24,8 @@ export const PlaylistDrawer: React.FC<PlaylistDrawerProps> = ({
   songs,
   currentSong,
   isPlaying,
+  currentTime = 0,
+  activeDuration = 0,
   likedSongIds = [],
   sharedSongId = null,
   onSelectSong,
@@ -60,7 +64,7 @@ export const PlaylistDrawer: React.FC<PlaylistDrawerProps> = ({
   });
 
   const formatDuration = (sec?: number) => {
-    if (!sec) return '2:30';
+    if (!sec || isNaN(sec) || sec <= 0) return '--:--';
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
     return `${m}:${s < 10 ? '0' : ''}${s}`;
@@ -267,9 +271,22 @@ export const PlaylistDrawer: React.FC<PlaylistDrawerProps> = ({
                     </button>
                   )}
 
-                  <span className="text-[11px] font-mono-code text-white/40 ml-1">
-                    {formatDuration(song.duration)}
-                  </span>
+                  {(() => {
+                    const effectiveDur = isCurrent && activeDuration > 0 ? activeDuration : song.duration || 0;
+                    const showCountdown = isCurrent && effectiveDur > 0 && (isPlaying || currentTime > 0);
+                    return (
+                      <span
+                        title={showCountdown ? 'Contagem regressiva' : 'Duração da música'}
+                        className={`text-[11px] font-mono-code ml-1 tabular-nums ${
+                          showCountdown ? 'text-amber-300 font-semibold' : 'text-white/40'
+                        }`}
+                      >
+                        {showCountdown
+                          ? `-${formatDuration(Math.max(0, effectiveDur - currentTime))}`
+                          : formatDuration(effectiveDur)}
+                      </span>
+                    );
+                  })()}
 
                   {/* Trash delete icon ONLY for admin */}
                   {isAdmin && (
